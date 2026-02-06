@@ -1,1 +1,1 @@
-# agentskills-go
+# fasttui
