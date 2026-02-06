@@ -61,20 +61,15 @@ type ProcessTerminal struct {
 	stdinFd       int
 }
 
-func NewProcessTerminal() *ProcessTerminal {
+func NewProcessTerminal() (*ProcessTerminal, error) {
 	fd := int(os.Stdin.Fd())
 
 	if !term.IsTerminal(fd) {
 		return &ProcessTerminal{
 			stdinFd: fd,
-		}
+		}, nil
 	}
-
-	oldState, err := term.MakeRaw(fd)
-	if err != nil {
-		return nil, err
-	}
-	return &ProcessTerminal{wasRaw: false}
+	return &ProcessTerminal{wasRaw: false}, nil
 }
 
 func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) {
@@ -82,14 +77,16 @@ func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) {
 	p.resizeHandler = onResize
 }
 
+func (p *ProcessTerminal) Stop() {
+	os.Stdout.WriteString(`\x1b[?2004l`)
+	p.inputHandler = nil
+	p.resizeHandler = nil
+}
+
 func (p *ProcessTerminal) setupStdinBuffer() {
 }
 
 func (p *ProcessTerminal) queryAndEnableKittyProtocol() {
-}
-
-func (p *ProcessTerminal) Stop() {
-	os.Stdout.WriteString(`\x1b[?2004l`)
 }
 
 func (p *ProcessTerminal) Write(data string) {
