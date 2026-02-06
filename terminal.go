@@ -1,6 +1,10 @@
 package fasttui
 
-import "os"
+import (
+	"os"
+
+	"golang.org/x/term"
+)
 
 // Terminal 终端接口定义
 type Terminal interface {
@@ -50,10 +54,32 @@ type Terminal interface {
 }
 
 type ProcessTerminal struct {
-	writeLogPath string
+	wasRaw        bool
+	writeLogPath  string
+	inputHandler  func(data string)
+	resizeHandler func()
+	stdinFd       int
+}
+
+func NewProcessTerminal() *ProcessTerminal {
+	fd := int(os.Stdin.Fd())
+
+	if !term.IsTerminal(fd) {
+		return &ProcessTerminal{
+			stdinFd: fd,
+		}
+	}
+
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return nil, err
+	}
+	return &ProcessTerminal{wasRaw: false}
 }
 
 func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) {
+	p.inputHandler = onInput
+	p.resizeHandler = onResize
 }
 
 func (p *ProcessTerminal) setupStdinBuffer() {
