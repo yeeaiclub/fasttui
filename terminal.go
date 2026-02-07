@@ -13,42 +13,17 @@ import (
 )
 
 type Terminal interface {
-	// Start 启动终端并设置输入和调整大小的处理器。
-	// onInput 是输入处理函数，onResize 是调整大小处理函数。
 	Start(onInput func(data string), onResize func())
-
-	// Stop 停止终端并恢复状态。
 	Stop()
-
-	// Write 向终端写入数据。
 	Write(data string)
-
-	// GetSize 返回终端的宽度和高度。
 	GetSize() (int, int)
-
-	// IsKittyProtocolActive 返回 Kitty 键盘协议是否激活。
 	IsKittyProtocolActive() bool
-
-	// MoveBy 相对当前位置移动光标。
-	// lines 为正数向下移动，为负数向上移动，为 0 时不移动。
 	MoveBy(lines int)
-
-	// HideCursor 隐藏光标。
 	HideCursor()
-
-	// ShowCursor 显示光标。
 	ShowCursor()
-
-	// ClearLine 清除当前行。
 	ClearLine()
-
-	// ClearFromCursor 清除从光标到屏幕末尾的内容。
 	ClearFromCursor()
-
-	// ClearScreen 清除整个屏幕并将光标移动到 (0,0)。
 	ClearScreen()
-
-	// SetTitle 设置终端窗口标题。
 	SetTitle(title string)
 }
 

@@ -1,10 +1,13 @@
 package components
 
 type Text struct {
+	text               string
+	paddingX, paddingY string
+	customBgFn         func(text string) string
 }
 
 func (t *Text) Render(width int) []string {
-	panic("implement me")
+	return nil
 }
 
 func (t *Text) HandleInput(data string) {

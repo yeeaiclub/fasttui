@@ -5,50 +5,31 @@ import (
 	"strings"
 )
 
-type Component interface {
-	// Render 根据给定的视口宽度将组件渲染为行。
-	// width 是当前视口宽度，返回字符串数组，每个字符串代表一行。
-	Render(width int) []string
-
-	// HandleInput 处理组件获得焦点时的键盘输入。
-	HandleInput(data string)
-
-	// WantsKeyRelease 返回组件是否接收按键释放事件（Kitty 协议）。
-	// 返回 true 表示组件将接收按键释放事件，false 表示释放事件会被过滤掉。
-	WantsKeyRelease() bool
-
-	// Invalidate 使任何缓存的渲染状态失效。
-	// 在主题更改或组件需要从头重新渲染时调用。
-	Invalidate()
-}
-
-type Focusable interface {
-	Component
-	SetFocused(bool)
-	IsFocused() bool
-}
-
-// OverlayStack 弹窗提示
-type OverlayStack struct {
-	component Component
-}
-
 type TUI struct {
 	Container
-	stopped             bool
-	terminal            Terminal
+	stopped  bool
+	terminal Terminal
+
+	renderRequested bool
+	fullRedrawCount int
+	renderChan      chan struct{}
+
 	previousLines       []string
 	previousWidth       int
-	focusedComponent    Component
-	showHardWareCursor  bool
-	cursorRow           int
-	hardwareCursorRow   int
-	maxLinesRendered    int
 	previousViewportTop int
-	renderRequested     bool
-	fullRedrawCount     int
-	renderChan          chan struct{}
-	showHardwareCursor  bool
+	maxLinesRendered    int
+
+	cursorRow          int
+	hardwareCursorRow  int
+	showHardWareCursor bool
+	showHardwareCursor bool // 重复字段
+
+	focusedComponent Component
+
+	cellSizeQueryPending bool
+	inoutBuffer          strings.Builder
+
+	overlayStacks []OverlayStack
 }
 
 func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
@@ -56,6 +37,7 @@ func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 		renderChan:         make(chan struct{}, 1),
 		terminal:           terminal,
 		showHardWareCursor: showHardwareCursor,
+		previousLines:      nil,
 	}
 	return t
 }
@@ -83,11 +65,17 @@ func (t *TUI) requestRender(force bool) {
 	if t.renderRequested {
 		return
 	}
+	t.renderRequested = true
+	select {
+	case t.renderChan <- struct{}{}:
+	default:
+	}
 }
 
 func (t *TUI) renderLoop() {
 	for range t.renderChan {
-		<-t.renderChan
+		t.renderRequested = false
+		t.doRender()
 	}
 }
 
@@ -111,10 +99,10 @@ func (t *TUI) start() {
 	t.stopped = false
 	t.terminal.Start(
 		func(data string) {
-
+			t.handleInput(data)
 		},
 		func() {
-
+			t.requestRender(false)
 		},
 	)
 }
@@ -125,8 +113,11 @@ func (t *TUI) Start() {
 	t.doRender()
 }
 
-func (t *TUI) handleInput() {
-
+func (t *TUI) handleInput(data string) {
+	if t.cellSizeQueryPending {
+		t.inoutBuffer.WriteString(data)
+	}
+	foucusedOverlay := t.overlayStacks
 }
 
 func (t *TUI) parseCellSizeResponse() string {
@@ -429,13 +420,6 @@ func (t *TUI) buildFullRenderBuffer(clear bool, newLines []string) string {
 	return builder.String()
 }
 
-func (t *TUI) fullRender(clear bool, newLines []string, width int, height int) {
-	t.fullRedrawCount++
-	buffer := t.buildFullRenderBuffer(clear, newLines)
-	t.terminal.Write(buffer)
-	t.updateRenderState(clear, len(newLines), width, height)
-}
-
 func (t *TUI) updateRenderState(clear bool, newLinesLen, width, height int) {
 	t.cursorRow = max(0, newLinesLen-1)
 	t.hardwareCursorRow = t.cursorRow
@@ -449,11 +433,11 @@ func (t *TUI) updateRenderState(clear bool, newLinesLen, width, height int) {
 	t.previousWidth = width
 }
 
-func (t *TUI) fullReader(clear bool, newLines []string) {
+func (t *TUI) fullRender(clear bool, newLines []string, width int, height int) {
 	t.fullRedrawCount++
-	t.previousLines = newLines
 	buffer := t.buildFullRenderBuffer(clear, newLines)
 	t.terminal.Write(buffer)
+	t.updateRenderState(clear, len(newLines), width, height)
 }
 
 func (t *TUI) showOverlay(component Component) {

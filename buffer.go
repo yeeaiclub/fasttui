@@ -5,9 +5,10 @@ import (
 )
 
 type StdinBuffer struct {
-	buffer    strings.Builder
-	pasteMode bool
-	OnData    func(seq string)
+	buffer      strings.Builder
+	pasteBuffer strings.Builder
+	pasteMode   bool
+	OnData      func(seq string)
 }
 
 func NewStdinBuffer() *StdinBuffer {
