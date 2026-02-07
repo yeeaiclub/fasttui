@@ -18,7 +18,7 @@ func (i *Input) HandleInput(data string) {
 }
 
 func (i *Input) WantsKeyRelease() bool {
-	panic("implement me")
+	return false
 }
 
 func (i *Input) Invalidate() {
