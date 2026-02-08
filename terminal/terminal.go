@@ -29,9 +29,12 @@ func (p *ProcessTerminal) GetSize() (int, int) {
 }
 
 func (p *ProcessTerminal) IsKittyProtocolActive() bool {
+	return false
 }
 
 func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) error {
+	go p.readStdin()
+	return nil
 }
 
 func (p *ProcessTerminal) readStdin() {
@@ -47,6 +50,7 @@ func (p *ProcessTerminal) readStdin() {
 }
 
 func (p *ProcessTerminal) DrainInput(maxMs int, idleMs int) error {
+	return nil
 }
 
 func (p *ProcessTerminal) queryAndEnableKittyProtocol() {

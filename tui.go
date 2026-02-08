@@ -95,9 +95,9 @@ func (t *TUI) SetFocus(component Component) {
 	}
 }
 
-func (t *TUI) start() {
+func (t *TUI) start() error {
 	t.stopped = false
-	t.terminal.Start(
+	return t.terminal.Start(
 		func(data string) {
 			t.handleInput(data)
 		},
@@ -113,11 +113,15 @@ func (t *TUI) Start() {
 	t.doRender()
 }
 
+func (t *TUI) Stop() {
+	t.stopped = true
+	t.terminal.Stop()
+}
+
 func (t *TUI) handleInput(data string) {
 	if t.cellSizeQueryPending {
 		t.inoutBuffer.WriteString(data)
 	}
-	foucusedOverlay := t.overlayStacks
 }
 
 func (t *TUI) parseCellSizeResponse() string {
