@@ -1,18 +1,18 @@
 package terminal
 
 import (
-	"bufio"
-	"golang.org/x/term"
 	"log"
 	"os"
-	"regexp"
 	"strconv"
-)
 
-var kittyPattern = regexp.MustCompile(`^\x1b\[\?(\d+)u$`)
+	"golang.org/x/term"
+)
 
 type ProcessTerminal struct {
 	buffer *StdinBuffer
+	stdout *os.File
+	fd     int
+	saved  *term.State
 }
 
 func NewProcessTerminal() *ProcessTerminal {
@@ -33,20 +33,14 @@ func (p *ProcessTerminal) IsKittyProtocolActive() bool {
 }
 
 func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) error {
-	go p.readStdin()
-	return nil
-}
-
-func (p *ProcessTerminal) readStdin() {
-	reader := bufio.NewReader(os.Stdin)
-	buf := make([]byte, 1024)
-	for {
-		n, err := reader.Read(buf)
-		if err != nil {
-			return
-		}
-		p.buffer.Process(string(buf[:n]))
+	p.stdout = os.Stdout
+	p.fd = int(os.Stdout.Fd())
+	saved, err := term.MakeRaw(p.fd)
+	if err != nil {
+		return err
 	}
+	p.saved = saved
+	return nil
 }
 
 func (p *ProcessTerminal) DrainInput(maxMs int, idleMs int) error {
@@ -54,14 +48,14 @@ func (p *ProcessTerminal) DrainInput(maxMs int, idleMs int) error {
 }
 
 func (p *ProcessTerminal) queryAndEnableKittyProtocol() {
-	os.Stdout.WriteString("\x1b[?u")
+	p.stdout.WriteString("\x1b[?u")
 }
 
 func (p *ProcessTerminal) Stop() {
 }
 
 func (p *ProcessTerminal) Write(data string) {
-	_, err := os.Stdout.WriteString(data)
+	_, err := p.stdout.WriteString(data)
 	if err != nil {
 		log.Printf("Error writing to stdout: %v", err)
 		return
@@ -70,35 +64,35 @@ func (p *ProcessTerminal) Write(data string) {
 
 func (p *ProcessTerminal) MoveBy(lines int) {
 	if lines > 0 {
-		os.Stdout.WriteString("\x1b[" + strconv.Itoa(lines) + "B")
+		p.stdout.WriteString("\x1b[" + strconv.Itoa(lines) + "B")
 	} else if lines < 0 {
 		// Move up
-		os.Stdout.WriteString("\x1b[" + strconv.Itoa(-lines) + "A")
+		p.stdout.WriteString("\x1b[" + strconv.Itoa(-lines) + "A")
 	}
 	// lines === 0: no movement
 }
 
 func (p *ProcessTerminal) HideCursor() {
-	os.Stdout.WriteString("\x1b[?25l")
+	p.stdout.WriteString("\x1b[?25l")
 }
 
 func (p *ProcessTerminal) ShowCursor() {
-	os.Stdout.WriteString("\x1b[?25h")
+	p.stdout.WriteString("\x1b[?25h")
 }
 
 func (p *ProcessTerminal) ClearLine() {
-	os.Stdout.WriteString("\x1b[2K")
+	p.stdout.WriteString("\x1b[2K")
 }
 
 func (p *ProcessTerminal) ClearFromCursor() {
-	os.Stdout.WriteString("\x1b[J")
+	p.stdout.WriteString("\x1b[J")
 }
 
 func (p *ProcessTerminal) ClearScreen() {
-	os.Stdout.WriteString("\x1b[2J\x1b[H") // Clear screen and move to home (1,1)
+	p.stdout.WriteString("\x1b[2J\x1b[H") // Clear screen and move to home (1,1)
 }
 
 func (p *ProcessTerminal) SetTitle(title string) {
 	// OSC 0;title BEL - set terminal window title
-	os.Stdout.WriteString("\x1b]0;" + title + "\x07")
+	p.stdout.WriteString("\x1b]0;" + title + "\x07")
 }
