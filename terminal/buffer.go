@@ -127,38 +127,41 @@ func (s *StdinBuffer) clear() {
 }
 
 func extractCompleteSequences(buffer string) ([]string, string) {
-	var seq []string
-	pos := 0
+	var sequences []string
+	var pos int
 
 	for pos < len(buffer) {
-		remaining := buffer[pos:]
-		if strings.HasPrefix(remaining, ESC) {
-			seqEnd := 1
-			for seqEnd <= len(remaining) {
-				candidate := remaining[:seqEnd]
-				status := isCompleteSequence(candidate)
-				if status == "complete" {
-					seq = append(seq, candidate)
-					pos += seqEnd
-					break
-				} else if status == "incomplete" {
-					seqEnd++
-				} else {
-					seq = append(seq, candidate)
-					pos += seqEnd
-					break
-				}
+		if buffer[pos] == ESC[0] {
+			seq, newPos := extractEscapeSequence(buffer, pos)
+			if seq == "" {
+				return sequences, buffer[pos:]
 			}
-			if seqEnd > len(remaining) {
-				return seq, remaining
-			}
+			sequences = append(sequences, seq)
+			pos = newPos
 		} else {
-			seq = append(seq, remaining[:1])
+			sequences = append(sequences, string(buffer[pos]))
 			pos++
 		}
 	}
 
-	return seq, ""
+	return sequences, ""
+}
+
+func extractEscapeSequence(buffer string, pos int) (string, int) {
+	for end := pos + 1; end <= len(buffer); end++ {
+		candidate := buffer[pos:end]
+		status := isCompleteSequence(candidate)
+
+		switch status {
+		case "complete":
+			return candidate, end
+		case "incomplete":
+			continue
+		default:
+			return candidate, end
+		}
+	}
+	return "", pos
 }
 
 func isCompleteSequence(candidate string) string {

@@ -9,10 +9,11 @@ import (
 )
 
 type ProcessTerminal struct {
-	buffer *StdinBuffer
-	stdout *os.File
-	fd     int
-	saved  *term.State
+	buffer       *StdinBuffer
+	stdout       *os.File
+	fd           int
+	saved        *term.State
+	inputHandler func(data string)
 }
 
 func NewProcessTerminal() *ProcessTerminal {
@@ -41,6 +42,18 @@ func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) erro
 	}
 	p.saved = saved
 	return nil
+}
+
+func (p *ProcessTerminal) readInputLoop() {
+
+}
+
+func (p *ProcessTerminal) setupStdinBuffer() {
+	p.buffer = NewStdinBuffer()
+	p.buffer.OnData = func(seq string) {
+	}
+	p.buffer.OnPaste = func(paste string) {
+	}
 }
 
 func (p *ProcessTerminal) DrainInput(maxMs int, idleMs int) error {
