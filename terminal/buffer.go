@@ -46,6 +46,18 @@ func (s *StdinBuffer) Process(data string) {
 	if s.pasteMode {
 		s.pasteBuffer += s.buffer
 		s.buffer = ""
+		endIndex := strings.Index(s.pasteBuffer, BRACKETED_PASTE_END)
+		if endIndex != -1 {
+			pastedContent := s.pasteBuffer[:endIndex]
+			remaining := s.pasteBuffer[endIndex+len(BRACKETED_PASTE_END):]
+			s.pasteMode = false
+			s.pasteBuffer = ""
+			s.evChan <- Event{Type: "paste", Data: pastedContent}
+			if len(remaining) > 0 {
+				s.Process(remaining)
+			}
+		}
+		return
 	}
 
 	// handle the before BRACKETED_PASTE_START
