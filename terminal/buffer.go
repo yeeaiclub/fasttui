@@ -2,9 +2,15 @@ package terminal
 
 import (
 	"regexp"
-	"strconv"
 	"strings"
 )
+
+const (
+	BRACKETED_PASTE_START = "\x1b[200~"
+	BRACKETED_PASTE_END   = "\x1b[201~"
+)
+
+var mouseSequenceRegex = regexp.MustCompile(`^<\d+;\d+;\d+[Mm]$`)
 
 type Event struct {
 	Type string
@@ -22,18 +28,18 @@ type StdinBuffer struct {
 
 func NewStdinBuffer() *StdinBuffer {
 	st := &StdinBuffer{
-		evChan: make(chan Event, 100),
+		evChan:    make(chan Event, 100),
+		pasteMode: false,
 	}
 	go st.ProcessEvent()
 	return st
 }
 
 func (s *StdinBuffer) Process(data string) {
-	// transform the data to a sequence
 	var seq string
 	if len(data) == 1 && data[0] > 127 {
 		byteValue := data[0]
-		seq = "\x1b[" + strconv.Itoa(int(byteValue-128))
+		seq = "\x1b" + string(byteValue-128)
 	} else {
 		seq = data
 	}
@@ -60,7 +66,6 @@ func (s *StdinBuffer) Process(data string) {
 		return
 	}
 
-	// handle the before BRACKETED_PASTE_START
 	startIndex := strings.Index(s.buffer, BRACKETED_PASTE_START)
 	if startIndex != -1 {
 		if startIndex > 0 {
@@ -87,6 +92,8 @@ func (s *StdinBuffer) Process(data string) {
 		}
 		return
 	}
+
+	// handle string and extract complete sequences
 	result, remaining := extractCompleteSequences(s.buffer)
 	s.buffer = remaining
 
@@ -109,13 +116,6 @@ func (s *StdinBuffer) ProcessEvent() {
 	}
 }
 
-const (
-	BRACKETED_PASTE_START = "\x1b[200~"
-	BRACKETED_PASTE_END   = "\x1b[201~"
-)
-
-var mouseSequenceRegex = regexp.MustCompile(`^<\d+;\d+;\d+[Mm]$`)
-
 func (s *StdinBuffer) Flush() []string {
 	return nil
 }
@@ -134,7 +134,7 @@ func extractCompleteSequences(buffer string) ([]string, string) {
 		remaining := buffer[pos:]
 		if strings.HasPrefix(remaining, ESC) {
 			seqEnd := 1
-			for seqEnd < len(remaining) {
+			for seqEnd <= len(remaining) {
 				candidate := remaining[:seqEnd]
 				status := isCompleteSequence(candidate)
 				if status == "complete" {
@@ -225,15 +225,14 @@ func isCompleteCsiSequence(data string) string {
 	lastChar := payload[len(payload)-1]
 	lastCharCode := byte(lastChar)
 
-	if lastCharCode < 0x40 || lastCharCode > 0x7e {
-		return "incomplete"
+	if lastCharCode >= 0x40 && lastCharCode <= 0x7e {
+		if strings.HasPrefix(payload, "<") {
+			return checkMouseSequence(payload)
+		}
+		return "complete"
 	}
 
-	if strings.HasPrefix(payload, "<") {
-		return checkMouseSequence(payload)
-	}
-
-	return "complete"
+	return "incomplete"
 }
 
 func checkMouseSequence(payload string) string {

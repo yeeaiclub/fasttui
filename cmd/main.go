@@ -28,9 +28,6 @@ func NewSimpleText(content string) *SimpleText {
 }
 
 func main() {
-	fmt.Println("测试 StdinBuffer 功能")
-	fmt.Println("====================")
-
 	buf := terminal.NewStdinBuffer()
 
 	buf.OnData = func(seq string) {
