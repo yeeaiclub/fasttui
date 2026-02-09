@@ -21,7 +21,9 @@ type StdinBuffer struct {
 }
 
 func NewStdinBuffer() *StdinBuffer {
-	st := &StdinBuffer{}
+	st := &StdinBuffer{
+		evChan: make(chan Event, 100),
+	}
 	go st.ProcessEvent()
 	return st
 }
@@ -40,6 +42,11 @@ func (s *StdinBuffer) Process(data string) {
 		return
 	}
 	s.buffer += seq
+
+	if s.pasteMode {
+		s.pasteBuffer += s.buffer
+		s.buffer = ""
+	}
 
 	// handle the before BRACKETED_PASTE_START
 	startIndex := strings.Index(s.buffer, BRACKETED_PASTE_START)
@@ -95,15 +102,16 @@ const (
 	BRACKETED_PASTE_END   = "\x1b[201~"
 )
 
-func (s *StdinBuffer) process(event Event) {
-
-}
+var mouseSequenceRegex = regexp.MustCompile(`^<\d+;\d+;\d+[Mm]$`)
 
 func (s *StdinBuffer) Flush() []string {
 	return nil
 }
 
 func (s *StdinBuffer) clear() {
+	s.buffer = ""
+	s.pasteMode = false
+	s.pasteBuffer = ""
 }
 
 func extractCompleteSequences(buffer string) ([]string, string) {
@@ -143,7 +151,7 @@ func extractCompleteSequences(buffer string) ([]string, string) {
 
 func isCompleteSequence(candidate string) string {
 	if !strings.HasPrefix(candidate, ESC) {
-		return "complete"
+		return "not-escape"
 	}
 	if len(candidate) == 1 {
 		return "incomplete"
@@ -151,7 +159,7 @@ func isCompleteSequence(candidate string) string {
 	afterEsc := candidate[1:]
 
 	if strings.HasPrefix(afterEsc, "[") {
-		if strings.HasSuffix(afterEsc, "[M") {
+		if strings.HasPrefix(afterEsc, "[M") {
 			if len(afterEsc) >= 6 {
 				return "complete"
 			}
@@ -205,36 +213,55 @@ func isCompleteCsiSequence(data string) string {
 	lastChar := payload[len(payload)-1]
 	lastCharCode := byte(lastChar)
 
-	if lastCharCode >= 0x40 && lastCharCode <= 0x7e {
-		if strings.HasPrefix(payload, "<") {
-			mouseMatch := regexp.MustCompile(`^<\d+;\d+;\d+[Mm]$`).MatchString(payload)
-			if mouseMatch {
-				return "complete"
-			}
+	if lastCharCode < 0x40 || lastCharCode > 0x7e {
+		return "incomplete"
+	}
 
-			if lastChar == 'M' || lastChar == 'm' {
-				parts := strings.Split(payload[1:len(payload)-1], ";")
-				if len(parts) == 3 {
-					allDigits := true
-					for _, p := range parts {
-						if _, err := strconv.Atoi(p); err != nil {
-							allDigits = false
-							break
-						}
-					}
-					if allDigits {
-						return "complete"
-					}
-				}
-			}
+	if strings.HasPrefix(payload, "<") {
+		return checkMouseSequence(payload)
+	}
 
-			return "incomplete"
-		}
+	return "complete"
+}
 
+func checkMouseSequence(payload string) string {
+	if mouseSequenceRegex.MatchString(payload) {
 		return "complete"
 	}
 
-	return "incomplete"
+	if len(payload) < 4 {
+		return "incomplete"
+	}
+
+	lastChar := payload[len(payload)-1]
+	if lastChar != 'M' && lastChar != 'm' {
+		return "incomplete"
+	}
+
+	parts := strings.Split(payload[1:len(payload)-1], ";")
+	if len(parts) != 3 {
+		return "incomplete"
+	}
+
+	for _, part := range parts {
+		if !isAllDigits(part) {
+			return "incomplete"
+		}
+	}
+
+	return "complete"
+}
+
+func isAllDigits(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func isCompleteOscSequence(data string) string {
