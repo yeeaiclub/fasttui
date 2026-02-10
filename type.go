@@ -41,13 +41,27 @@ type OverlayStack struct {
 	hidden    bool
 }
 
-type OverlayOption struct {
-	Width int
-}
+type OverlayAnchor string
 
-func isFocused(component Component) bool {
-	if focusable, ok := component.(Focusable); ok {
-		return focusable.IsFocused()
-	}
-	return false
+const (
+	AnchorCenter       OverlayAnchor = "center"
+	AnchorTopLeft      OverlayAnchor = "top-left"
+	AnchorTopRight     OverlayAnchor = "top-right"
+	AnchorBottomLeft   OverlayAnchor = "bottom-left"
+	AnchorBottomRight  OverlayAnchor = "bottom-right"
+	AnchorTopCenter    OverlayAnchor = "top-center"
+	AnchorBottomCenter OverlayAnchor = "bottom-center"
+	AnchorLeftCenter   OverlayAnchor = "left-center"
+	AnchorRightCenter  OverlayAnchor = "right-center"
+)
+
+type OverlayOption struct {
+	Width     int
+	MiniWidth int
+	MaxHeight int
+	Anchor    OverlayAnchor
+	Offset    OverlayAnchor
+	Row       int
+	Margin    any
+	Visible   func(width int, height int) bool
 }

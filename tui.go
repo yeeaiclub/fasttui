@@ -34,6 +34,7 @@ type TUI struct {
 func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 	t := &TUI{
 		renderChan:         make(chan struct{}, 1),
+		overlayStacks:      make([]OverlayStack, 0),
 		terminal:           terminal,
 		showHardwareCursor: showHardwareCursor,
 		previousLines:      nil,
@@ -76,8 +77,31 @@ func (t *TUI) SetFocus(component Component) {
 	}
 }
 
-func (t *TUI) showOverlay(component Component, options OverlayOption) {
+func (t *TUI) showOverlay(component Component, options OverlayOption) OverlayHandle {
+	entry := OverlayStack{
+		component: component,
+		options:   options,
+		preFocus:  t.focusedComponent,
+	}
+	t.overlayStacks = append(t.overlayStacks, entry)
 
+	if t.isOverlayVisible(&entry) {
+		t.SetFocus(entry.component)
+	}
+	t.terminal.HideCursor()
+	t.requestRender(false)
+	return nil
+}
+
+func (t *TUI) isOverlayVisible(entry *OverlayStack) bool {
+	if entry.hidden {
+		return false
+	}
+	if entry.options.Visible != nil {
+		width, height := t.terminal.GetSize()
+		return entry.options.Visible(width, height)
+	}
+	return true
 }
 
 func (t *TUI) hideOverlay() {
@@ -399,7 +423,7 @@ func (t *TUI) getScope(newLines []string) (int, int) {
 		lastChanged  = -1
 	)
 	maxLines := max(len(newLines), len(t.previousLines))
-	for i := 0; i < maxLines; i++ {
+	for i := range maxLines {
 		oldLine := ""
 		newLine := ""
 		if i < len(t.previousLines) {
@@ -462,14 +486,6 @@ func (t *TUI) fullRender(clear bool, newLines []string, width int, height int) {
 	buffer := t.buildFullRenderBuffer(clear, newLines)
 	t.terminal.Write(buffer)
 	t.updateRenderState(clear, len(newLines), width, height)
-}
-
-func (t *TUI) showOverlay(component Component) {
-	return
-}
-
-func (t *TUI) hideOverlay() {
-	return
 }
 
 var CURSOR_MARKER = "\x1b_pi:c\x07"
