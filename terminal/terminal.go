@@ -1,24 +1,29 @@
 package terminal
 
 import (
-	"log"
 	"os"
+	"regexp"
 	"strconv"
 
 	"golang.org/x/term"
 )
 
+var kittyResponsePattern = regexp.MustCompile(`^\x1b\[\?(\d+)u$`)
+
 type ProcessTerminal struct {
-	buffer       *StdinBuffer
-	stdout       *os.File
-	fd           int
-	saved        *term.State
-	inputHandler func(data string)
+	buffer                *StdinBuffer
+	stdout                *os.File
+	fd                    int
+	saved                 *term.State
+	input                 chan string
+	iskittyProtocolActive bool
+	inputHandler          func(data string)
+	stdinDataBuffer       func(data string)
 }
 
 func NewProcessTerminal() *ProcessTerminal {
 	buffer := NewStdinBuffer()
-	return &ProcessTerminal{buffer: buffer}
+	return &ProcessTerminal{buffer: buffer, iskittyProtocolActive: false}
 }
 
 func (p *ProcessTerminal) GetSize() (int, int) {
@@ -30,7 +35,7 @@ func (p *ProcessTerminal) GetSize() (int, int) {
 }
 
 func (p *ProcessTerminal) IsKittyProtocolActive() bool {
-	return false
+	return p.iskittyProtocolActive
 }
 
 func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) error {
@@ -41,71 +46,111 @@ func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) erro
 		return err
 	}
 	p.saved = saved
+	p.inputHandler = onInput
+
+	p.print("\x1b[?2004h")
+
+	p.queryAndEnableKittyProtocol()
+	go p.readInputLoop()
 	return nil
 }
 
 func (p *ProcessTerminal) readInputLoop() {
-
+	buf := make([]byte, 1024)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			return
+		}
+		if n > 0 {
+			data := string(buf[:n])
+			if p.stdinDataBuffer != nil {
+				p.stdinDataBuffer(data)
+			}
+		}
+	}
 }
 
 func (p *ProcessTerminal) setupStdinBuffer() {
 	p.buffer = NewStdinBuffer()
 	p.buffer.OnData = func(seq string) {
+		if !p.iskittyProtocolActive {
+			match := kittyResponsePattern.FindStringSubmatch(seq)
+			if len(match) > 0 {
+				p.iskittyProtocolActive = true
+				p.print("\x1b[>7u")
+				return
+			}
+		}
+		if p.inputHandler != nil {
+			p.inputHandler(seq)
+		}
 	}
 	p.buffer.OnPaste = func(paste string) {
+		if p.inputHandler != nil {
+			p.inputHandler("\x1b[200~" + paste + "\x1b[201~")
+		}
 	}
+	p.stdinDataBuffer = func(data string) {
+		p.buffer.Process(data)
+	}
+}
+
+func (p *ProcessTerminal) queryAndEnableKittyProtocol() {
+	p.setupStdinBuffer()
+	p.print("\x1b[?u")
 }
 
 func (p *ProcessTerminal) DrainInput(maxMs int, idleMs int) error {
 	return nil
 }
 
-func (p *ProcessTerminal) queryAndEnableKittyProtocol() {
-	p.stdout.WriteString("\x1b[?u")
-}
-
 func (p *ProcessTerminal) Stop() {
+	p.print("\x1b[?2004l")
+	if p.IsKittyProtocolActive() {
+		p.print("\x1b[>7l")
+	}
 }
 
 func (p *ProcessTerminal) Write(data string) {
-	_, err := p.stdout.WriteString(data)
-	if err != nil {
-		log.Printf("Error writing to stdout: %v", err)
-		return
-	}
+	p.print(data)
 }
 
 func (p *ProcessTerminal) MoveBy(lines int) {
 	if lines > 0 {
-		p.stdout.WriteString("\x1b[" + strconv.Itoa(lines) + "B")
+		p.print("\x1b[" + strconv.Itoa(lines) + "B")
 	} else if lines < 0 {
 		// Move up
-		p.stdout.WriteString("\x1b[" + strconv.Itoa(-lines) + "A")
+		p.print("\x1b[" + strconv.Itoa(-lines) + "A")
 	}
 	// lines === 0: no movement
 }
 
 func (p *ProcessTerminal) HideCursor() {
-	p.stdout.WriteString("\x1b[?25l")
+	p.print("\x1b[?25l")
 }
 
 func (p *ProcessTerminal) ShowCursor() {
-	p.stdout.WriteString("\x1b[?25h")
+	p.print("\x1b[?25h")
 }
 
 func (p *ProcessTerminal) ClearLine() {
-	p.stdout.WriteString("\x1b[2K")
+	p.print("\x1b[2K")
 }
 
 func (p *ProcessTerminal) ClearFromCursor() {
-	p.stdout.WriteString("\x1b[J")
+	p.print("\x1b[J")
 }
 
 func (p *ProcessTerminal) ClearScreen() {
-	p.stdout.WriteString("\x1b[2J\x1b[H") // Clear screen and move to home (1,1)
+	p.print("\x1b[2J\x1b[H") // Clear screen and move to home (1,1)
 }
 
 func (p *ProcessTerminal) SetTitle(title string) {
 	// OSC 0;title BEL - set terminal window title
-	p.stdout.WriteString("\x1b]0;" + title + "\x07")
+	p.print("\x1b]0;" + title + "\x07")
+}
+
+func (p *ProcessTerminal) print(s string) {
+	_, _ = p.stdout.WriteString(s)
 }
