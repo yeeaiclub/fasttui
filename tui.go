@@ -308,7 +308,7 @@ func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, ter
 	row = max(marginTop, min(row, termHeight-marginBottom-effectiveHeight))
 	col = max(marginLeft, min(col, termWidth-marginRight-width))
 
-	return overlayLayout{
+	return OverlayLayout{
 		width:     width,
 		row:       row,
 		col:       col,
