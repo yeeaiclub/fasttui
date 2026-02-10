@@ -375,7 +375,7 @@ func (t *TUI) start() error {
 	t.stopped = false
 	return t.terminal.Start(
 		func(data string) {
-			t.handleInput(data)
+			t.HandleInput(data)
 		},
 		func() {
 			t.requestRender(false)

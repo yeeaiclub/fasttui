@@ -48,6 +48,7 @@ func (i *Input) Render(width int) []string {
 		if i.cursor == len(i.value) {
 			scrollWidth = availableWidth - 1
 		}
+		scrollWidth = max(1, scrollWidth)
 		halfWidth := scrollWidth / 2
 
 		if i.cursor < halfWidth {
@@ -63,12 +64,21 @@ func (i *Input) Render(width int) []string {
 		}
 	}
 
+	if len(visibleText) == 0 {
+		return []string{prompt}
+	}
+
+	cursorDisplay = max(0, min(cursorDisplay, len(visibleText)))
+
 	beforeCursor := visibleText[:cursorDisplay]
 	atCursor := " "
 	if cursorDisplay < len(visibleText) {
 		atCursor = string(visibleText[cursorDisplay])
 	}
-	afterCursor := visibleText[cursorDisplay+1:]
+	afterCursor := ""
+	if cursorDisplay+1 < len(visibleText) {
+		afterCursor = visibleText[cursorDisplay+1:]
+	}
 
 	marker := ""
 	if i.focused {
@@ -113,20 +123,33 @@ func (i *Input) HandleInput(data string) {
 
 	kb := keys.GetEditorKeybindings()
 	if kb.Matches(data, keys.EditorActionSelectCancel) {
-		i.onEscape()
+		if i.onEscape != nil {
+			i.onEscape()
+		}
 		return
 	}
 
-	if kb.Matches(data, keys.EditorActionSubmit) {
-		i.onSubmit(i.value)
+	if kb.Matches(data, keys.EditorActionSubmit) || data == "\n" {
+		if i.onSubmit != nil {
+			i.onSubmit(i.value)
+		}
 		return
 	}
 
-	if len(data) == 1 {
+	hasControlChars := false
+	for _, ch := range data {
+		code := int(ch)
+		if code < 32 || code == 0x7f || (code >= 0x80 && code <= 0x9f) {
+			hasControlChars = true
+			break
+		}
+	}
+
+	if !hasControlChars {
 		before := i.value[:i.cursor]
 		after := i.value[i.cursor:]
 		i.value = before + data + after
-		i.cursor++
+		i.cursor += len(data)
 	}
 }
 func (i *Input) WantsKeyRelease() bool {
@@ -137,6 +160,22 @@ func (i *Input) Invalidate() {
 
 func (i *Input) GetValue() string {
 	return i.value
+}
+
+func (i *Input) SetFocused(focused bool) {
+	i.focused = focused
+}
+
+func (i *Input) IsFocused() bool {
+	return i.focused
+}
+
+func (i *Input) SetOnSubmit(onSubmit func(string)) {
+	i.onSubmit = onSubmit
+}
+
+func (i *Input) SetOnEscape(onEscape func()) {
+	i.onEscape = onEscape
 }
 
 func (i *Input) handlePaste(content string) {
