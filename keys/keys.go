@@ -1,4 +1,4 @@
-package fasttui
+package keys
 
 import (
 	"regexp"

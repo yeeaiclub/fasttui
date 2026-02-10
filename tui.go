@@ -21,8 +21,7 @@ type TUI struct {
 
 	cursorRow          int
 	hardwareCursorRow  int
-	showHardWareCursor bool
-	showHardwareCursor bool // 重复字段
+	showHardwareCursor bool
 
 	focusedComponent Component
 
@@ -36,21 +35,56 @@ func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 	t := &TUI{
 		renderChan:         make(chan struct{}, 1),
 		terminal:           terminal,
-		showHardWareCursor: showHardwareCursor,
+		showHardwareCursor: showHardwareCursor,
 		previousLines:      nil,
 	}
 	return t
 }
 
+func (t *TUI) GetFullRedraws() int {
+	return t.fullRedrawCount
+}
+
+func (t *TUI) GetShowHardwareCursor() bool {
+	return t.showHardwareCursor
+}
+
 func (t *TUI) SetShowHardwareCursor(enabled bool) {
-	if t.showHardWareCursor == enabled {
+	if t.showHardwareCursor == enabled {
 		return
 	}
-	t.showHardWareCursor = enabled
+	t.showHardwareCursor = enabled
 	if !enabled {
 		t.terminal.HideCursor()
 	}
 	t.requestRender(false)
+}
+
+func (t *TUI) SetFocus(component Component) {
+	if t.focusedComponent != nil {
+		if f, ok := t.focusedComponent.(Focusable); ok {
+			f.SetFocused(false)
+		}
+	}
+
+	t.focusedComponent = component
+
+	if component != nil {
+		if f, ok := t.focusedComponent.(Focusable); ok {
+			f.SetFocused(true)
+		}
+	}
+}
+
+func (t *TUI) showOverlay(component Component, options OverlayOption) {
+
+}
+
+func (t *TUI) hideOverlay() {
+}
+
+func (t *TUI) HasOverlay() bool {
+	return false
 }
 
 func (t *TUI) requestRender(force bool) {
@@ -72,26 +106,13 @@ func (t *TUI) requestRender(force bool) {
 	}
 }
 
+func (t *TUI) HandleInput(data string) {
+}
+
 func (t *TUI) renderLoop() {
 	for range t.renderChan {
 		t.renderRequested = false
 		t.doRender()
-	}
-}
-
-func (t *TUI) SetFocus(component Component) {
-	if t.focusedComponent != nil {
-		if f, ok := t.focusedComponent.(Focusable); ok {
-			f.SetFocused(false)
-		}
-	}
-
-	t.focusedComponent = component
-
-	if component != nil {
-		if f, ok := t.focusedComponent.(Focusable); ok {
-			f.SetFocused(true)
-		}
 	}
 }
 
@@ -321,7 +342,7 @@ func (t *TUI) scrollViewport(ctx renderContext, builder *strings.Builder, moveTa
 		builder.WriteString(fmt.Sprintf("\x1b[%dB", moveToBottom))
 	}
 	scroll := moveTargetRow - prevViewportBottom
-	for i := 0; i < scroll; i++ {
+	for range scroll {
 		builder.WriteString("\r\n")
 	}
 	ctx.prevViewportTop += scroll
@@ -407,7 +428,6 @@ func (t *TUI) getScope(newLines []string) (int, int) {
 	return firstChanged, lastChanged
 }
 
-// buildFullRenderBuffer 将所有的字符输出到终端上面去
 func (t *TUI) buildFullRenderBuffer(clear bool, newLines []string) string {
 	var builder strings.Builder
 	builder.WriteString("\x1b[?2026h")
@@ -445,11 +465,11 @@ func (t *TUI) fullRender(clear bool, newLines []string, width int, height int) {
 }
 
 func (t *TUI) showOverlay(component Component) {
-
+	return
 }
 
 func (t *TUI) hideOverlay() {
-
+	return
 }
 
 var CURSOR_MARKER = "\x1b_pi:c\x07"

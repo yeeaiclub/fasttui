@@ -36,7 +36,18 @@ type OverlayHandle interface {
 
 type OverlayStack struct {
 	component Component
-	options   any
+	options   OverlayOption
 	preFocus  Component
 	hidden    bool
+}
+
+type OverlayOption struct {
+	Width int
+}
+
+func isFocused(component Component) bool {
+	if focusable, ok := component.(Focusable); ok {
+		return focusable.IsFocused()
+	}
+	return false
 }
