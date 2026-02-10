@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
-
 	"github.com/yeeaiclub/fasttui"
 	"github.com/yeeaiclub/fasttui/components"
 	"github.com/yeeaiclub/fasttui/terminal"
+	"os"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
@@ -24,8 +26,20 @@ func main() {
 	tui.SetFocus(input)
 
 	tui.AddChild(components.NewDynamicBorder(func(s string) string { return s }))
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT)
+
+	go func() {
+		<-sigChan
+		tui.Stop()
+		fmt.Println("\nExiting...")
+		os.Exit(0)
+	}()
+
 	tui.Start()
 
-	for true {
-	}
+	done := make(chan struct{})
+	<-done
+
 }

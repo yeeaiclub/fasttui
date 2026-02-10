@@ -15,14 +15,14 @@ type ProcessTerminal struct {
 	stdout *os.File
 	fd     int
 	// saved                 *term.State
-	iskittyProtocolActive bool
+	isKittyProtocolActive bool
 	inputHandler          func(data string)
 	stdinDataBuffer       func(data string)
 }
 
 func NewProcessTerminal() *ProcessTerminal {
 	buffer := NewStdinBuffer()
-	return &ProcessTerminal{buffer: buffer, iskittyProtocolActive: false}
+	return &ProcessTerminal{buffer: buffer, isKittyProtocolActive: false}
 }
 
 func (p *ProcessTerminal) GetSize() (int, int) {
@@ -34,7 +34,7 @@ func (p *ProcessTerminal) GetSize() (int, int) {
 }
 
 func (p *ProcessTerminal) IsKittyProtocolActive() bool {
-	return p.iskittyProtocolActive
+	return p.isKittyProtocolActive
 }
 
 func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) error {
@@ -68,10 +68,10 @@ func (p *ProcessTerminal) readInputLoop() {
 func (p *ProcessTerminal) setupStdinBuffer() {
 	p.buffer = NewStdinBuffer()
 	p.buffer.OnData = func(seq string) {
-		if !p.iskittyProtocolActive {
+		if !p.isKittyProtocolActive {
 			match := kittyResponsePattern.FindStringSubmatch(seq)
 			if len(match) > 0 {
-				p.iskittyProtocolActive = true
+				p.isKittyProtocolActive = true
 				p.print("\x1b[>7u")
 				return
 			}

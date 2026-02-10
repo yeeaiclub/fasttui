@@ -24,7 +24,7 @@ type SelectList struct {
 }
 
 func (s *SelectList) Render(width int) []string {
-	lines := []string{}
+	var lines []string
 
 	if len(s.filteredItems) == 0 {
 		if s.theme.NoMatch != nil {
