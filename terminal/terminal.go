@@ -15,6 +15,7 @@ var kittyResponsePattern = regexp.MustCompile(`^\x1b\[\?(\d+)u$`)
 
 type ProcessTerminal struct {
 	buffer                *StdinBuffer
+	oldState              *term.State
 	fd                    int
 	isKittyProtocolActive bool
 	inputHandler          func(data string)
@@ -53,12 +54,12 @@ func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) erro
 	p.inputHandler = onInput
 	p.resizeHandler = onResize
 
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	oldState, err := term.MakeRaw(p.fd)
 	if err != nil {
 		return err
 	}
 	p.wasRaw = oldState != nil
-
+	p.oldState = oldState
 	p.print("\x1b[?2004h")
 
 	p.queryAndEnableKittyProtocol()
@@ -179,7 +180,10 @@ func (p *ProcessTerminal) Stop() {
 	}
 
 	if p.wasRaw {
-		term.Restore(int(os.Stdin.Fd()), nil)
+		err := term.Restore(p.fd, p.oldState)
+		if err != nil {
+			return
+		}
 	}
 
 	signal.Stop(p.resizeSignalChan)

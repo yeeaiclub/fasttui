@@ -286,6 +286,7 @@ func (ctx *renderContext) computeLineDiff(targetRow int) int {
 }
 
 func (t *TUI) doRender() {
+	println("------>")
 	if t.stopped {
 		return
 	}
