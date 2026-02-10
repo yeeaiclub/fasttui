@@ -62,6 +62,16 @@ type OverlayOption struct {
 	Anchor    OverlayAnchor
 	Offset    OverlayAnchor
 	Row       int
+	Col       int
+	OffsetX   int
+	OffsetY   int
 	Margin    any
 	Visible   func(width int, height int) bool
+}
+
+type OverlayLayout struct {
+	width     int
+	row       int
+	col       int
+	maxHeight *int
 }

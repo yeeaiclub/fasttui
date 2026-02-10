@@ -177,6 +177,11 @@ func (t *TUI) getTopmostVisibleOverlay() *OverlayStack {
 }
 
 func (t *TUI) HasOverlay() bool {
+	for _, entry := range t.overlayStacks {
+		if t.isOverlayVisible(&entry) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -231,6 +236,131 @@ func (t *TUI) HandleInput(data string) {
 		}
 		t.focusedComponent.HandleInput(data)
 		t.requestRender(false)
+	}
+}
+
+func (t *TUI) queryCellSize() {
+	if !t.terminal.IsKittyProtocolActive() {
+		return
+	}
+	t.cellSizeQueryPending = true
+	t.terminal.Write("\x1b[16t")
+}
+
+func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, termWidth int, termHeight int) OverlayLayout {
+	marginTop, marginRight, marginBottom, marginLeft := t.parseMargin(options.Margin)
+
+	availWidth := max(1, termWidth-marginLeft-marginRight)
+	availHeight := max(1, termHeight-marginTop-marginBottom)
+
+	width := t.parseSizeValue(options.Width, termWidth)
+	if width == 0 {
+		width = min(80, availWidth)
+	}
+	if options.MiniWidth > 0 {
+		width = max(width, options.MiniWidth)
+	}
+	width = max(1, min(width, availWidth))
+
+	var maxHeight *int
+	if options.MaxHeight > 0 {
+		maxHeightVal := t.parseSizeValue(options.MaxHeight, termHeight)
+		if maxHeightVal > 0 {
+			maxHeightVal = max(1, min(maxHeightVal, availHeight))
+			maxHeight = &maxHeightVal
+		}
+	}
+
+	effectiveHeight := overlayHeight
+	if maxHeight != nil {
+		effectiveHeight = min(overlayHeight, *maxHeight)
+	}
+
+	var row, col int
+
+	if options.Row != 0 {
+		row = options.Row
+	} else {
+		anchor := options.Anchor
+		if anchor == "" {
+			anchor = AnchorCenter
+		}
+		row = t.resolveAnchorRow(anchor, effectiveHeight, availHeight, marginTop)
+	}
+
+	if options.Col != 0 {
+		col = options.Col
+	} else {
+		anchor := options.Anchor
+		if anchor == "" {
+			anchor = AnchorCenter
+		}
+		col = t.resolveAnchorCol(anchor, width, availWidth, marginLeft)
+	}
+
+	if options.OffsetY != 0 {
+		row += options.OffsetY
+	}
+	if options.OffsetX != 0 {
+		col += options.OffsetX
+	}
+
+	row = max(marginTop, min(row, termHeight-marginBottom-effectiveHeight))
+	col = max(marginLeft, min(col, termWidth-marginRight-width))
+
+	return overlayLayout{
+		width:     width,
+		row:       row,
+		col:       col,
+		maxHeight: maxHeight,
+	}
+}
+
+func (t *TUI) parseMargin(margin any) (marginTop, marginRight, marginBottom, marginLeft int) {
+	if margin == nil {
+		return 0, 0, 0, 0
+	}
+
+	switch v := margin.(type) {
+	case int:
+		return max(0, v), max(0, v), max(0, v), max(0, v)
+	case map[string]int:
+		return max(0, v["top"]), max(0, v["right"]), max(0, v["bottom"]), max(0, v["left"])
+	default:
+		return 0, 0, 0, 0
+	}
+}
+
+func (t *TUI) parseSizeValue(value int, total int) int {
+	if value <= 0 {
+		return 0
+	}
+	return value
+}
+
+func (t *TUI) resolveAnchorRow(anchor OverlayAnchor, height int, availHeight int, marginTop int) int {
+	switch anchor {
+	case AnchorTopLeft, AnchorTopCenter, AnchorTopRight:
+		return marginTop
+	case AnchorBottomLeft, AnchorBottomCenter, AnchorBottomRight:
+		return marginTop + max(0, availHeight-height)
+	case AnchorLeftCenter, AnchorRightCenter, AnchorCenter:
+		return marginTop + max(0, availHeight-height)/2
+	default:
+		return marginTop
+	}
+}
+
+func (t *TUI) resolveAnchorCol(anchor OverlayAnchor, width int, availWidth int, marginLeft int) int {
+	switch anchor {
+	case AnchorTopLeft, AnchorBottomLeft, AnchorLeftCenter:
+		return marginLeft
+	case AnchorTopRight, AnchorBottomRight, AnchorRightCenter:
+		return marginLeft + max(0, availWidth-width)
+	case AnchorTopCenter, AnchorBottomCenter, AnchorCenter:
+		return marginLeft + max(0, availWidth-width)/2
+	default:
+		return marginLeft
 	}
 }
 
