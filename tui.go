@@ -239,7 +239,7 @@ func (t *TUI) HandleInput(data string) {
 	}
 }
 
-func (t *TUI) queryCellSize() {
+func (t *TUI) QueryCellSize() {
 	if !t.terminal.IsKittyProtocolActive() {
 		return
 	}
