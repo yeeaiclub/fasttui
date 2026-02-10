@@ -2,6 +2,8 @@ package fasttui
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/yeeaiclub/fasttui/keys"
@@ -28,9 +30,10 @@ type TUI struct {
 	focusedComponent Component
 
 	cellSizeQueryPending bool
-	inoutBuffer          strings.Builder
+	inputBuffer          strings.Builder
 
 	overlayStacks []OverlayStack
+	clearOnShrink bool
 }
 
 func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
@@ -42,147 +45,6 @@ func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 		previousLines:      nil,
 	}
 	return t
-}
-
-func (t *TUI) GetFullRedraws() int {
-	return t.fullRedrawCount
-}
-
-func (t *TUI) GetShowHardwareCursor() bool {
-	return t.showHardwareCursor
-}
-
-func (t *TUI) SetShowHardwareCursor(enabled bool) {
-	if t.showHardwareCursor == enabled {
-		return
-	}
-	t.showHardwareCursor = enabled
-	if !enabled {
-		t.terminal.HideCursor()
-	}
-	t.requestRender(false)
-}
-
-func (t *TUI) SetFocus(component Component) {
-	if t.focusedComponent != nil {
-		if f, ok := t.focusedComponent.(Focusable); ok {
-			f.SetFocused(false)
-		}
-	}
-
-	t.focusedComponent = component
-
-	if component != nil {
-		if f, ok := t.focusedComponent.(Focusable); ok {
-			f.SetFocused(true)
-		}
-	}
-}
-
-func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
-	entry := OverlayStack{
-		component: component,
-		options:   options,
-		preFocus:  t.focusedComponent,
-	}
-	t.overlayStacks = append(t.overlayStacks, entry)
-
-	if t.isOverlayVisible(&entry) {
-		t.SetFocus(entry.component)
-	}
-	t.terminal.HideCursor()
-	t.requestRender(false)
-
-	hide := func() {
-		index := -1
-		for i, e := range t.overlayStacks {
-			if e.component == component {
-				index = i
-				break
-			}
-		}
-		if index != -1 {
-			t.overlayStacks = append(t.overlayStacks[:index], t.overlayStacks[index+1:]...)
-			if t.focusedComponent == component {
-				topVisible := t.getTopmostVisibleOverlay()
-				if topVisible != nil {
-					t.SetFocus(topVisible.component)
-				} else {
-					t.SetFocus(entry.preFocus)
-				}
-			}
-			if len(t.overlayStacks) == 0 {
-				t.terminal.HideCursor()
-			}
-			t.requestRender(false)
-		}
-	}
-
-	setHidden := func(hidden bool) {
-		if entry.hidden == hidden {
-			return
-		}
-		entry.hidden = hidden
-		if hidden {
-			if t.focusedComponent == component {
-				topVisible := t.getTopmostVisibleOverlay()
-				if topVisible != nil {
-					t.SetFocus(topVisible.component)
-				} else {
-					t.SetFocus(entry.preFocus)
-				}
-			}
-		} else {
-			if t.isOverlayVisible(&entry) {
-				t.SetFocus(component)
-			}
-		}
-		t.requestRender(false)
-	}
-
-	return hide, setHidden, func() bool { return entry.hidden }
-}
-
-func (t *TUI) isOverlayVisible(entry *OverlayStack) bool {
-	if entry.hidden {
-		return false
-	}
-	if entry.options.Visible != nil {
-		width, height := t.terminal.GetSize()
-		return entry.options.Visible(width, height)
-	}
-	return true
-}
-
-func (t *TUI) HideOverlay() {
-	// POP last overlay
-	if len(t.overlayStacks) > 0 {
-		entry := t.overlayStacks[len(t.overlayStacks)-1]
-		t.overlayStacks = t.overlayStacks[:len(t.overlayStacks)-1]
-		if !entry.hidden {
-			t.SetFocus(entry.preFocus)
-		}
-	}
-}
-
-// GetTopmostVisibleOverlay returns the topmost visible overlay, or nil if none.
-func (t *TUI) getTopmostVisibleOverlay() *OverlayStack {
-	for i := len(t.overlayStacks) - 1; i >= 0; i-- {
-		entry := t.overlayStacks[i]
-		if t.isOverlayVisible(&entry) {
-			return &entry
-		}
-	}
-	return nil
-}
-
-func (t *TUI) HasOverlay() bool {
-	for _, entry := range t.overlayStacks {
-		if t.isOverlayVisible(&entry) {
-			return true
-		}
-	}
-	return false
 }
 
 func (t *TUI) requestRender(force bool) {
@@ -206,7 +68,7 @@ func (t *TUI) requestRender(force bool) {
 
 func (t *TUI) HandleInput(data string) {
 	if t.cellSizeQueryPending {
-		t.inoutBuffer.WriteString(data)
+		t.inputBuffer.WriteString(data)
 		filtered := t.parseCellSizeResponse()
 		if filtered == "" {
 			return
@@ -237,14 +99,6 @@ func (t *TUI) HandleInput(data string) {
 		t.focusedComponent.HandleInput(data)
 		t.requestRender(false)
 	}
-}
-
-func (t *TUI) QueryCellSize() {
-	if !t.terminal.IsKittyProtocolActive() {
-		return
-	}
-	t.cellSizeQueryPending = true
-	t.terminal.Write("\x1b[16t")
 }
 
 func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, termWidth int, termHeight int) OverlayLayout {
@@ -338,32 +192,6 @@ func (t *TUI) parseSizeValue(value int, total int) int {
 	return value
 }
 
-func (t *TUI) resolveAnchorRow(anchor OverlayAnchor, height int, availHeight int, marginTop int) int {
-	switch anchor {
-	case AnchorTopLeft, AnchorTopCenter, AnchorTopRight:
-		return marginTop
-	case AnchorBottomLeft, AnchorBottomCenter, AnchorBottomRight:
-		return marginTop + max(0, availHeight-height)
-	case AnchorLeftCenter, AnchorRightCenter, AnchorCenter:
-		return marginTop + max(0, availHeight-height)/2
-	default:
-		return marginTop
-	}
-}
-
-func (t *TUI) resolveAnchorCol(anchor OverlayAnchor, width int, availWidth int, marginLeft int) int {
-	switch anchor {
-	case AnchorTopLeft, AnchorBottomLeft, AnchorLeftCenter:
-		return marginLeft
-	case AnchorTopRight, AnchorBottomRight, AnchorRightCenter:
-		return marginLeft + max(0, availWidth-width)
-	case AnchorTopCenter, AnchorBottomCenter, AnchorCenter:
-		return marginLeft + max(0, availWidth-width)/2
-	default:
-		return marginLeft
-	}
-}
-
 func (t *TUI) renderLoop() {
 	for range t.renderChan {
 		t.renderRequested = false
@@ -394,14 +222,42 @@ func (t *TUI) Stop() {
 	t.terminal.Stop()
 }
 
-func (t *TUI) handleInput(data string) {
-	if t.cellSizeQueryPending {
-		t.inoutBuffer.WriteString(data)
-	}
-}
-
 func (t *TUI) parseCellSizeResponse() string {
-	return ""
+	data := t.inputBuffer.String()
+
+	responsePattern := `\x1b\[6;(\d+);(\d+)t`
+	re := regexp.MustCompile(responsePattern)
+	matches := re.FindStringSubmatch(data)
+
+	if len(matches) == 3 {
+		heightPx, err1 := strconv.Atoi(matches[1])
+		widthPx, err2 := strconv.Atoi(matches[2])
+
+		if err1 == nil && err2 == nil && heightPx > 0 && widthPx > 0 {
+			t.Invalidate()
+			t.requestRender(false)
+
+			t.inputBuffer.Reset()
+			t.cellSizeQueryPending = false
+			return ""
+		}
+	}
+
+	partialPattern := `\x1b(\[6?;?[\d;]*)?$`
+	rePartial := regexp.MustCompile(partialPattern)
+	if rePartial.MatchString(data) {
+		if len(data) > 0 {
+			lastChar := data[len(data)-1]
+			if !((lastChar >= 'a' && lastChar <= 'z') || (lastChar >= 'A' && lastChar <= 'Z') || lastChar == '~') {
+				return ""
+			}
+		}
+	}
+
+	result := t.inputBuffer.String()
+	t.inputBuffer.Reset()
+	t.cellSizeQueryPending = false
+	return result
 }
 
 type renderContext struct {

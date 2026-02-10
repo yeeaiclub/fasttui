@@ -2,8 +2,11 @@ package terminal
 
 import (
 	"os"
+	"os/signal"
 	"regexp"
 	"strconv"
+	"syscall"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -11,18 +14,26 @@ import (
 var kittyResponsePattern = regexp.MustCompile(`^\x1b\[\?(\d+)u$`)
 
 type ProcessTerminal struct {
-	buffer *StdinBuffer
-	stdout *os.File
-	fd     int
-	// saved                 *term.State
+	buffer                *StdinBuffer
+	fd                    int
 	isKittyProtocolActive bool
 	inputHandler          func(data string)
 	stdinDataBuffer       func(data string)
+	wasRaw                bool
+	resizeHandler         func()
+	resizeSignalChan      chan os.Signal
+	stopChan              chan struct{}
 }
 
 func NewProcessTerminal() *ProcessTerminal {
 	buffer := NewStdinBuffer()
-	return &ProcessTerminal{buffer: buffer, isKittyProtocolActive: false}
+	return &ProcessTerminal{
+		buffer:                buffer,
+		isKittyProtocolActive: false,
+		wasRaw:                false,
+		resizeSignalChan:      make(chan os.Signal, 1),
+		stopChan:              make(chan struct{}),
+	}
 }
 
 func (p *ProcessTerminal) GetSize() (int, int) {
@@ -38,13 +49,23 @@ func (p *ProcessTerminal) IsKittyProtocolActive() bool {
 }
 
 func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) error {
-	p.stdout = os.Stdout
 	p.fd = int(os.Stdout.Fd())
 	p.inputHandler = onInput
+	p.resizeHandler = onResize
+
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		return err
+	}
+	p.wasRaw = oldState != nil
 
 	p.print("\x1b[?2004h")
 
 	p.queryAndEnableKittyProtocol()
+
+	signal.Notify(p.resizeSignalChan, syscall.SIGWINCH)
+	go p.handleResizeSignal()
+
 	go p.readInputLoop()
 	return nil
 }
@@ -52,15 +73,33 @@ func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) erro
 func (p *ProcessTerminal) readInputLoop() {
 	buf := make([]byte, 1024)
 	for {
-		n, err := os.Stdin.Read(buf)
-		if err != nil {
+		select {
+		case <-p.stopChan:
 			return
-		}
-		if n > 0 {
-			data := string(buf[:n])
-			if p.stdinDataBuffer != nil {
-				p.stdinDataBuffer(data)
+		default:
+			n, err := os.Stdin.Read(buf)
+			if err != nil {
+				return
 			}
+			if n > 0 {
+				data := string(buf[:n])
+				if p.stdinDataBuffer != nil {
+					p.stdinDataBuffer(data)
+				}
+			}
+		}
+	}
+}
+
+func (p *ProcessTerminal) handleResizeSignal() {
+	for {
+		select {
+		case <-p.resizeSignalChan:
+			if p.resizeHandler != nil {
+				p.resizeHandler()
+			}
+		case <-p.stopChan:
+			return
 		}
 	}
 }
@@ -70,8 +109,9 @@ func (p *ProcessTerminal) setupStdinBuffer() {
 	p.buffer.OnData = func(seq string) {
 		if !p.isKittyProtocolActive {
 			match := kittyResponsePattern.FindStringSubmatch(seq)
-			if len(match) > 0 {
+			if len(match) > 1 {
 				p.isKittyProtocolActive = true
+
 				p.print("\x1b[>7u")
 				return
 			}
@@ -86,7 +126,9 @@ func (p *ProcessTerminal) setupStdinBuffer() {
 		}
 	}
 	p.stdinDataBuffer = func(data string) {
-		p.buffer.Process(data)
+		if p.buffer != nil {
+			p.buffer.Process(data)
+		}
 	}
 }
 
@@ -96,6 +138,37 @@ func (p *ProcessTerminal) queryAndEnableKittyProtocol() {
 }
 
 func (p *ProcessTerminal) DrainInput(maxMs int, idleMs int) error {
+	if p.isKittyProtocolActive {
+		p.print("\x1b[<u")
+		p.isKittyProtocolActive = false
+	}
+
+	previousHandler := p.inputHandler
+	p.inputHandler = nil
+
+	lastDataTime := time.Now()
+	endTime := time.Now().Add(time.Duration(maxMs) * time.Millisecond)
+	idleTimeout := time.Duration(idleMs) * time.Millisecond
+
+	buf := make([]byte, 1024)
+
+	for time.Now().Before(endTime) {
+		os.Stdin.SetReadDeadline(time.Now().Add(idleTimeout))
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			break
+		}
+		if n > 0 {
+			lastDataTime = time.Now()
+		}
+
+		if time.Since(lastDataTime) > idleTimeout {
+			break
+		}
+	}
+
+	os.Stdin.SetReadDeadline(time.Time{})
+	p.inputHandler = previousHandler
 	return nil
 }
 
@@ -104,6 +177,13 @@ func (p *ProcessTerminal) Stop() {
 	if p.IsKittyProtocolActive() {
 		p.print("\x1b[>7l")
 	}
+
+	if p.wasRaw {
+		term.Restore(int(os.Stdin.Fd()), nil)
+	}
+
+	signal.Stop(p.resizeSignalChan)
+	close(p.stopChan)
 }
 
 func (p *ProcessTerminal) Write(data string) {
@@ -146,5 +226,5 @@ func (p *ProcessTerminal) SetTitle(title string) {
 }
 
 func (p *ProcessTerminal) print(s string) {
-	_, _ = p.stdout.WriteString(s)
+	_, _ = os.Stdout.WriteString(s)
 }
