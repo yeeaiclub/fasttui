@@ -3,6 +3,8 @@ package fasttui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/yeeaiclub/fasttui/keys"
 )
 
 type TUI struct {
@@ -77,7 +79,7 @@ func (t *TUI) SetFocus(component Component) {
 	}
 }
 
-func (t *TUI) showOverlay(component Component, options OverlayOption) OverlayHandle {
+func (t *TUI) showOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
 	entry := OverlayStack{
 		component: component,
 		options:   options,
@@ -90,7 +92,55 @@ func (t *TUI) showOverlay(component Component, options OverlayOption) OverlayHan
 	}
 	t.terminal.HideCursor()
 	t.requestRender(false)
-	return nil
+
+	hide := func() {
+		index := -1
+		for i, e := range t.overlayStacks {
+			if e.component == component {
+				index = i
+				break
+			}
+		}
+		if index != -1 {
+			t.overlayStacks = append(t.overlayStacks[:index], t.overlayStacks[index+1:]...)
+			if t.focusedComponent == component {
+				topVisible := t.getTopmostVisibleOverlay()
+				if topVisible != nil {
+					t.SetFocus(topVisible.component)
+				} else {
+					t.SetFocus(entry.preFocus)
+				}
+			}
+			if len(t.overlayStacks) == 0 {
+				t.terminal.HideCursor()
+			}
+			t.requestRender(false)
+		}
+	}
+
+	setHidden := func(hidden bool) {
+		if entry.hidden == hidden {
+			return
+		}
+		entry.hidden = hidden
+		if hidden {
+			if t.focusedComponent == component {
+				topVisible := t.getTopmostVisibleOverlay()
+				if topVisible != nil {
+					t.SetFocus(topVisible.component)
+				} else {
+					t.SetFocus(entry.preFocus)
+				}
+			}
+		} else {
+			if t.isOverlayVisible(&entry) {
+				t.SetFocus(component)
+			}
+		}
+		t.requestRender(false)
+	}
+
+	return hide, setHidden, func() bool { return entry.hidden }
 }
 
 func (t *TUI) isOverlayVisible(entry *OverlayStack) bool {
@@ -105,6 +155,25 @@ func (t *TUI) isOverlayVisible(entry *OverlayStack) bool {
 }
 
 func (t *TUI) hideOverlay() {
+	// POP last overlay
+	if len(t.overlayStacks) > 0 {
+		entry := t.overlayStacks[len(t.overlayStacks)-1]
+		t.overlayStacks = t.overlayStacks[:len(t.overlayStacks)-1]
+		if !entry.hidden {
+			t.SetFocus(entry.preFocus)
+		}
+	}
+}
+
+// GetTopmostVisibleOverlay returns the topmost visible overlay, or nil if none.
+func (t *TUI) getTopmostVisibleOverlay() *OverlayStack {
+	for i := len(t.overlayStacks) - 1; i >= 0; i-- {
+		entry := t.overlayStacks[i]
+		if t.isOverlayVisible(&entry) {
+			return &entry
+		}
+	}
+	return nil
 }
 
 func (t *TUI) HasOverlay() bool {
@@ -131,6 +200,38 @@ func (t *TUI) requestRender(force bool) {
 }
 
 func (t *TUI) HandleInput(data string) {
+	if t.cellSizeQueryPending {
+		t.inoutBuffer.WriteString(data)
+		filtered := t.parseCellSizeResponse()
+		if filtered == "" {
+			return
+		}
+		data = filtered
+	}
+
+	var focusedOverlay *OverlayStack
+	for i := range t.overlayStacks {
+		if t.overlayStacks[i].component == t.focusedComponent {
+			focusedOverlay = &t.overlayStacks[i]
+			break
+		}
+	}
+	if focusedOverlay != nil && !t.isOverlayVisible(focusedOverlay) {
+		topVisible := t.getTopmostVisibleOverlay()
+		if topVisible != nil {
+			t.SetFocus(topVisible.component)
+		} else {
+			t.SetFocus(focusedOverlay.preFocus)
+		}
+	}
+
+	if t.focusedComponent != nil {
+		if keys.IsKeyRelease(data) && !t.focusedComponent.WantsKeyRelease() {
+			return
+		}
+		t.focusedComponent.HandleInput(data)
+		t.requestRender(false)
+	}
 }
 
 func (t *TUI) renderLoop() {
