@@ -11,11 +11,10 @@ import (
 var kittyResponsePattern = regexp.MustCompile(`^\x1b\[\?(\d+)u$`)
 
 type ProcessTerminal struct {
-	buffer                *StdinBuffer
-	stdout                *os.File
-	fd                    int
-	saved                 *term.State
-	input                 chan string
+	buffer *StdinBuffer
+	stdout *os.File
+	fd     int
+	// saved                 *term.State
 	iskittyProtocolActive bool
 	inputHandler          func(data string)
 	stdinDataBuffer       func(data string)
@@ -41,11 +40,6 @@ func (p *ProcessTerminal) IsKittyProtocolActive() bool {
 func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) error {
 	p.stdout = os.Stdout
 	p.fd = int(os.Stdout.Fd())
-	saved, err := term.MakeRaw(p.fd)
-	if err != nil {
-		return err
-	}
-	p.saved = saved
 	p.inputHandler = onInput
 
 	p.print("\x1b[?2004h")
