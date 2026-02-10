@@ -79,7 +79,7 @@ func (t *TUI) SetFocus(component Component) {
 	}
 }
 
-func (t *TUI) showOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
+func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
 	entry := OverlayStack{
 		component: component,
 		options:   options,
@@ -154,7 +154,7 @@ func (t *TUI) isOverlayVisible(entry *OverlayStack) bool {
 	return true
 }
 
-func (t *TUI) hideOverlay() {
+func (t *TUI) HideOverlay() {
 	// POP last overlay
 	if len(t.overlayStacks) > 0 {
 		entry := t.overlayStacks[len(t.overlayStacks)-1]
