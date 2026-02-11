@@ -49,7 +49,7 @@ func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 	return t
 }
 
-func (t *TUI) requestRender(force bool) {
+func (t *TUI) RequestRender(force bool) {
 	if force {
 		t.previousLines = nil
 		t.previousWidth = -1
@@ -66,6 +66,11 @@ func (t *TUI) requestRender(force bool) {
 	case t.renderChan <- struct{}{}:
 	default:
 	}
+}
+
+// requestRender is an internal alias for backward compatibility
+func (t *TUI) requestRender(force bool) {
+	t.RequestRender(force)
 }
 
 func (t *TUI) HandleInput(data string) {
@@ -697,18 +702,45 @@ func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
 }
 
 func (t *TUI) compositeLineAt(baseLine string, overlayLine string, col int, overlayWidth int, termWidth int) string {
-	if col >= termWidth {
+	if t.containsImage(baseLine) {
 		return baseLine
 	}
 
-	baseWidth := VisibleWidth(baseLine)
-	if baseWidth < col {
-		padding := strings.Repeat(" ", col-baseWidth)
-		return baseLine + padding + overlayLine
-	}
+	// Single pass through baseLine extracts both before and after segments
+	afterStart := col + overlayWidth
+	before, beforeWidth, after, afterWidth := ExtractSegments(baseLine, col, afterStart, termWidth-afterStart, true)
 
-	before, _, after, _ := ExtractSegments(baseLine, col, col+overlayWidth, overlayWidth, false)
-	return before + overlayLine + after
+	// Extract overlay with width tracking (strict=true to exclude wide chars at boundary)
+	overlay := SliceWithWidth(overlayLine, 0, overlayWidth, true)
+
+	// Pad segments to target widths
+	beforePad := max(0, col-beforeWidth)
+	overlayPad := max(0, overlayWidth-overlay.width)
+	actualBeforeWidth := max(col, beforeWidth)
+	actualOverlayWidth := max(overlayWidth, overlay.width)
+	afterTarget := max(0, termWidth-actualBeforeWidth-actualOverlayWidth)
+	afterPad := max(0, afterTarget-afterWidth)
+
+	// Compose result
+	var result strings.Builder
+	result.WriteString(before)
+	result.WriteString(strings.Repeat(" ", beforePad))
+	result.WriteString(SEGMENT_RESET)
+	result.WriteString(overlay.text)
+	result.WriteString(strings.Repeat(" ", overlayPad))
+	result.WriteString(SEGMENT_RESET)
+	result.WriteString(after)
+	result.WriteString(strings.Repeat(" ", afterPad))
+
+	// CRITICAL: Always verify and truncate to terminal width.
+	// This is the final safeguard against width overflow which would crash the TUI.
+	resultStr := result.String()
+	resultWidth := VisibleWidth(resultStr)
+	if resultWidth <= termWidth {
+		return resultStr
+	}
+	// Truncate with strict=true to ensure we don't exceed termWidth
+	return SliceByColumn(resultStr, 0, termWidth, true)
 }
 
 var CURSOR_MARKER = "\x1b_pi:c\x07"
@@ -734,7 +766,13 @@ func (t *TUI) writeCrashLog(path string, data string) {
 }
 
 func (t *TUI) applyLineRests(lines []string) []string {
-	//todo: 需要处理图片line
-	//todo: 暂时不实现
-	return lines
+	result := make([]string, len(lines))
+	for i, line := range lines {
+		if t.containsImage(line) {
+			result[i] = line
+		} else {
+			result[i] = line + SEGMENT_RESET
+		}
+	}
+	return result
 }

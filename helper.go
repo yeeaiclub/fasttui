@@ -24,6 +24,7 @@ func (t *TUI) SetFocus(component Component) {
 }
 
 func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
+	entryIndex := len(t.overlayStacks)
 	entry := Overlay{
 		component: component,
 		options:   options,
@@ -32,28 +33,29 @@ func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), f
 	}
 	t.overlayStacks = append(t.overlayStacks, entry)
 
-	if t.isOverlayVisible(&entry) {
-		t.SetFocus(entry.component)
+	if t.isOverlayVisible(&t.overlayStacks[entryIndex]) {
+		t.SetFocus(component)
 	}
 	t.terminal.HideCursor()
 	t.requestRender(false)
 
 	hide := func() {
 		index := -1
-		for i, e := range t.overlayStacks {
-			if e.component == component {
+		for i := range t.overlayStacks {
+			if t.overlayStacks[i].component == component {
 				index = i
 				break
 			}
 		}
 		if index != -1 {
+			preFocus := t.overlayStacks[index].preFocus
 			t.overlayStacks = append(t.overlayStacks[:index], t.overlayStacks[index+1:]...)
 			if t.focusedComponent == component {
 				topVisible := t.getTopmostVisibleOverlay()
 				if topVisible != nil {
 					t.SetFocus(topVisible.component)
 				} else {
-					t.SetFocus(entry.preFocus)
+					t.SetFocus(preFocus)
 				}
 			}
 			if len(t.overlayStacks) == 0 {
@@ -64,39 +66,70 @@ func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), f
 	}
 
 	setHidden := func(hidden bool) {
-		if entry.hidden == hidden {
+		// Find the entry in the slice
+		index := -1
+		for i := range t.overlayStacks {
+			if t.overlayStacks[i].component == component {
+				index = i
+				break
+			}
+		}
+		if index == -1 {
 			return
 		}
-		entry.hidden = hidden
+
+		if t.overlayStacks[index].hidden == hidden {
+			return
+		}
+		t.overlayStacks[index].hidden = hidden
 		if hidden {
 			if t.focusedComponent == component {
 				topVisible := t.getTopmostVisibleOverlay()
 				if topVisible != nil {
 					t.SetFocus(topVisible.component)
 				} else {
-					t.SetFocus(entry.preFocus)
+					t.SetFocus(t.overlayStacks[index].preFocus)
 				}
 			}
 		} else {
-			if t.isOverlayVisible(&entry) {
+			if t.isOverlayVisible(&t.overlayStacks[index]) {
 				t.SetFocus(component)
 			}
 		}
 		t.requestRender(false)
 	}
 
-	return hide, setHidden, func() bool { return entry.hidden }
+	isHidden := func() bool {
+		for i := range t.overlayStacks {
+			if t.overlayStacks[i].component == component {
+				return t.overlayStacks[i].hidden
+			}
+		}
+		return true
+	}
+
+	return hide, setHidden, isHidden
 }
 
 func (t *TUI) HideOverlay() {
-	// POP last overlay
-	if len(t.overlayStacks) > 0 {
-		entry := t.overlayStacks[len(t.overlayStacks)-1]
-		t.overlayStacks = t.overlayStacks[:len(t.overlayStacks)-1]
-		if !entry.hidden {
-			t.SetFocus(entry.preFocus)
-		}
+	if len(t.overlayStacks) == 0 {
+		return
 	}
+	overlay := t.overlayStacks[len(t.overlayStacks)-1]
+	t.overlayStacks = t.overlayStacks[:len(t.overlayStacks)-1]
+
+	// Find topmost visible overlay, or fall back to preFocus
+	topVisible := t.getTopmostVisibleOverlay()
+	if topVisible != nil {
+		t.SetFocus(topVisible.component)
+	} else {
+		t.SetFocus(overlay.preFocus)
+	}
+
+	if len(t.overlayStacks) == 0 {
+		t.terminal.HideCursor()
+	}
+	t.requestRender(false)
 }
 
 func (t *TUI) HasOverlay() bool {
@@ -189,7 +222,8 @@ func (t *TUI) GetShowHardwareCursor() bool {
 }
 
 func (t *TUI) positionHardwareCursor(row int, col int, totalLines int) {
-	if (row == 0 && col == 0) || totalLines <= 0 {
+	// Check if no cursor position was found (row == -1, col == -1)
+	if (row < 0 || col < 0) || totalLines <= 0 {
 		t.terminal.HideCursor()
 		return
 	}
@@ -272,11 +306,10 @@ func (t *TUI) extractCursorPosition(lines []string, height int) (int, int) {
 		index := strings.Index(line, CursorMarker)
 		if index != -1 {
 			beforeMarker := line[:index]
-			// todo: 需要处理 unicode
 			col := VisibleWidth(beforeMarker)
-			lines[row] = line[:index] + line[index+len(CURSOR_MARKER):]
+			lines[row] = line[:index] + line[index+len(CursorMarker):]
 			return row, col
 		}
 	}
-	return 0, 0
+	return -1, -1 // Return -1, -1 to indicate no cursor found
 }

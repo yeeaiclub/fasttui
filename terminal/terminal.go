@@ -49,16 +49,15 @@ func (p *ProcessTerminal) IsKittyProtocolActive() bool {
 }
 
 func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) error {
-	p.fd = int(os.Stdout.Fd())
 	p.inputHandler = onInput
 	p.resizeHandler = onResize
 
-	// Save previous state and enable raw mode
+	// Save previous state and enable raw mode on STDIN (not stdout!)
+	p.fd = int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(p.fd)
 	if err != nil {
 		return err
 	}
-	p.wasRaw = oldState != nil
 	p.oldState = oldState
 
 	// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
@@ -67,9 +66,11 @@ func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) erro
 	// Query and enable Kitty keyboard protocol
 	p.queryAndEnableKittyProtocol()
 
-	// signal.Notify(p.resizeSignalChan, syscall.SIGWINCH)
-	// go p.handleResizeSignal()
+	// Set up resize signal handling
+	signal.Notify(p.resizeSignalChan, os.Interrupt)
+	go p.handleResizeSignal()
 
+	// Start reading input in background
 	go p.readInputLoop()
 	return nil
 }
@@ -81,8 +82,15 @@ func (p *ProcessTerminal) readInputLoop() {
 		case <-p.stopChan:
 			return
 		default:
+			// Set a read deadline to allow checking stopChan periodically
+			os.Stdin.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 			n, err := os.Stdin.Read(buf)
 			if err != nil {
+				// Check if it's a timeout error (expected)
+				if os.IsTimeout(err) {
+					continue
+				}
+				// Other errors mean we should stop
 				return
 			}
 			if n > 0 {
@@ -199,6 +207,9 @@ func (p *ProcessTerminal) DrainInput(maxMs int, idleMs int) error {
 }
 
 func (p *ProcessTerminal) Stop() {
+	// Signal goroutines to stop
+	close(p.stopChan)
+
 	// Disable bracketed paste mode
 	p.print("\x1b[?2004l")
 
@@ -210,6 +221,7 @@ func (p *ProcessTerminal) Stop() {
 
 	// Clean up StdinBuffer
 	if p.buffer != nil {
+		p.buffer.Close()
 		p.buffer = nil
 	}
 
@@ -218,16 +230,15 @@ func (p *ProcessTerminal) Stop() {
 	p.inputHandler = nil
 	p.resizeHandler = nil
 
-	// Restore raw mode state
-	if p.oldState != nil {
-		err := term.Restore(p.fd, p.oldState)
-		if err != nil {
-			return
-		}
-	}
-
+	// Stop signal notifications
 	signal.Stop(p.resizeSignalChan)
-	close(p.stopChan)
+
+	// Restore terminal state
+	if p.oldState != nil {
+		// Clear any read deadline before restoring
+		os.Stdin.SetReadDeadline(time.Time{})
+		term.Restore(p.fd, p.oldState)
+	}
 }
 
 func (p *ProcessTerminal) Write(data string) {

@@ -238,25 +238,37 @@ func (s *StdinBuffer) processSS3() bool {
 }
 
 func (s *StdinBuffer) emitData(data string) {
-	s.evChan <- Event{Type: "data", Data: data}
+	select {
+	case s.evChan <- Event{Type: "data", Data: data}:
+	default:
+		// Channel full, drop event (shouldn't happen with buffered channel)
+	}
 }
 
 func (s *StdinBuffer) emitPaste(data string) {
-	s.evChan <- Event{Type: "paste", Data: data}
+	select {
+	case s.evChan <- Event{Type: "paste", Data: data}:
+	default:
+		// Channel full, drop event
+	}
 }
 
 func (s *StdinBuffer) ProcessEvent() {
-	for {
-		select {
-		case seq := <-s.evChan:
-			if seq.Type == "data" {
-				s.OnData(seq.Data)
-			} else if seq.Type == "paste" {
-				s.OnPaste(seq.Data)
+	for ev := range s.evChan {
+		if ev.Type == "data" {
+			if s.OnData != nil {
+				s.OnData(ev.Data)
 			}
-		default:
+		} else if ev.Type == "paste" {
+			if s.OnPaste != nil {
+				s.OnPaste(ev.Data)
+			}
 		}
 	}
+}
+
+func (s *StdinBuffer) Close() {
+	close(s.evChan)
 }
 
 func (s *StdinBuffer) Flush() []string {

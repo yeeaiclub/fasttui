@@ -30,20 +30,25 @@ func (k *KeyLogger) HandleInput(data string) {
 	if keys.MatchesKey(data, "ctrl+c") {
 		k.tui.Stop()
 		fmt.Println("\nExiting...")
-		return
+		os.Exit(0)
 	}
 
 	hex := k.toHex(data)
 	charCodes := k.toCharCodes(data)
 	repr := k.toRepr(data)
 
-	logLine := fmt.Sprintf("Hex: %-20s | Chars: [%-15s] | Repr: \"%s\"", hex, charCodes, repr)
+	// Don't create the full log line here - just store the raw data
+	// We'll format it in Render() where we know the terminal width
+	logLine := fmt.Sprintf("Hex: %s | Chars: [%s] | Repr: \"%s\"", hex, charCodes, repr)
 
 	k.log = append(k.log, logLine)
 
 	if len(k.log) > k.maxLines {
 		k.log = k.log[1:]
 	}
+
+	// Request re-render to show the new log entry
+	k.tui.RequestRender(false)
 }
 
 func (k *KeyLogger) WantsKeyRelease() bool {
@@ -83,17 +88,21 @@ func (k *KeyLogger) Render(width int) []string {
 }
 
 func (k *KeyLogger) toHex(data string) string {
+	// Convert string to bytes to get correct hex representation
+	bytes := []byte(data)
 	result := ""
-	for _, c := range data {
-		result += fmt.Sprintf("%02x", c)
+	for _, b := range bytes {
+		result += fmt.Sprintf("%02x", b)
 	}
 	return result
 }
 
 func (k *KeyLogger) toCharCodes(data string) string {
-	codes := make([]string, len(data))
-	for i, c := range data {
-		codes[i] = fmt.Sprintf("%d", c)
+	// Convert string to bytes to get correct char codes
+	bytes := []byte(data)
+	codes := make([]string, len(bytes))
+	for i, b := range bytes {
+		codes[i] = fmt.Sprintf("%d", b)
 	}
 	return strings.Join(codes, ", ")
 }
@@ -109,10 +118,32 @@ func (k *KeyLogger) toRepr(data string) string {
 }
 
 func (k *KeyLogger) padRight(s string, width int) string {
-	if len(s) >= width {
-		return s[:width]
+	if width <= 0 {
+		return ""
 	}
-	return s + strings.Repeat(" ", width-len(s))
+
+	// Use VisibleWidth to handle ANSI codes and wide characters correctly
+	visibleLen := fasttui.VisibleWidth(s)
+
+	if visibleLen > width {
+		// Truncate to fit
+		truncated := fasttui.SliceByColumn(s, 0, width, true)
+		// Double-check the result doesn't exceed width
+		if fasttui.VisibleWidth(truncated) > width {
+			// Fallback: use simple string slicing if SliceByColumn fails
+			// This shouldn't happen, but it's a safety net
+			if len(s) > width {
+				return s[:width]
+			}
+			return s
+		}
+		return truncated
+	} else if visibleLen < width {
+		// Pad to width
+		return s + strings.Repeat(" ", width-visibleLen)
+	}
+	// Exactly the right width
+	return s
 }
 
 func main() {
@@ -135,6 +166,7 @@ func main() {
 
 	tui.Start()
 
-	done := make(chan struct{})
-	<-done
+	// Keep the program running - the goroutine handles rendering
+	// Exit is handled by Ctrl+C or SIGINT
+	select {}
 }

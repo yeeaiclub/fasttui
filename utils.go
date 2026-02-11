@@ -1,6 +1,7 @@
 package fasttui
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -18,6 +19,10 @@ const (
 
 var (
 	widthCache = make(map[string]int)
+	// Pre-compile regex patterns for VisibleWidth
+	ansiCSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*[mGKHJ]`)
+	ansiOSCPattern = regexp.MustCompile(`\x1b\]8;;[^\x07]*\x07`)
+	ansiAPCPattern = regexp.MustCompile(`\x1b_[^\x07\x1b]*(\x07|\x1b\\)`)
 )
 
 type segmentType int
@@ -79,13 +84,14 @@ func VisibleWidth(s string) int {
 	}
 
 	clean := s
-	if containsString(clean, "\t") {
-		clean = replaceAllString(clean, "\t", "   ")
+	if strings.Contains(clean, "\t") {
+		clean = strings.ReplaceAll(clean, "\t", "   ")
 	}
-	if containsString(clean, "\x1b") {
-		clean = replaceAllString(clean, "\x1b\\[[0-9;]*[mGKHJ]", "")
-		clean = replaceAllString(clean, "\x1b\\]8;;[^\x07]*\x07", "")
-		clean = replaceAllString(clean, "\x1b_[^\x07\x1b]*(?:\x07|\x17\\\\)", "")
+	if strings.Contains(clean, "\x1b") {
+		// Use pre-compiled regex patterns to strip ANSI codes
+		clean = ansiCSIPattern.ReplaceAllString(clean, "")
+		clean = ansiOSCPattern.ReplaceAllString(clean, "")
+		clean = ansiAPCPattern.ReplaceAllString(clean, "")
 	}
 
 	width := len(clean)
