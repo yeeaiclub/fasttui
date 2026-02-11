@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/yeeaiclub/fasttui"
+	"github.com/yeeaiclub/fasttui/keys"
 )
 
 type Input struct {
@@ -29,124 +30,261 @@ func NewInput() *Input {
 }
 
 func (i *Input) Render(width int) []string {
-	const prompt = "> "
-
+	// Calculate visible window
+	prompt := "> "
 	availableWidth := width - len(prompt)
 
 	if availableWidth <= 0 {
 		return []string{prompt}
 	}
 
-	var visibleText string
+	visibleText := ""
 	cursorDisplay := i.cursor
 
 	if len(i.value) < availableWidth {
+		// Everything fits (leave room for cursor at end)
 		visibleText = i.value
 	} else {
+		// Need horizontal scrolling
+		// Reserve one character for cursor if it's at the end
 		scrollWidth := availableWidth
 		if i.cursor == len(i.value) {
 			scrollWidth = availableWidth - 1
 		}
-		scrollWidth = max(1, scrollWidth)
 		halfWidth := scrollWidth / 2
 
 		if i.cursor < halfWidth {
+			// Cursor near start
 			visibleText = i.value[:scrollWidth]
 			cursorDisplay = i.cursor
 		} else if i.cursor > len(i.value)-halfWidth {
+			// Cursor near end
 			visibleText = i.value[len(i.value)-scrollWidth:]
 			cursorDisplay = scrollWidth - (len(i.value) - i.cursor)
 		} else {
+			// Cursor in middle
 			start := i.cursor - halfWidth
 			visibleText = i.value[start : start+scrollWidth]
 			cursorDisplay = halfWidth
 		}
 	}
 
-	if len(visibleText) == 0 {
-		return []string{prompt}
+	// Build line with fake cursor
+	// Insert cursor character at cursor position
+	beforeCursor := ""
+	if cursorDisplay > 0 {
+		beforeCursor = visibleText[:cursorDisplay]
 	}
 
-	cursorDisplay = max(0, min(cursorDisplay, len(visibleText)))
-
-	beforeCursor := visibleText[:cursorDisplay]
-	atCursor := " "
+	atCursor := " " // Character at cursor, or space if at end
 	if cursorDisplay < len(visibleText) {
 		atCursor = string(visibleText[cursorDisplay])
 	}
+
 	afterCursor := ""
 	if cursorDisplay+1 < len(visibleText) {
 		afterCursor = visibleText[cursorDisplay+1:]
 	}
 
+	// Hardware cursor marker (zero-width, emitted before fake cursor for IME positioning)
 	marker := ""
 	if i.focused {
-		marker = fasttui.CURSOR_MARKER
+		marker = fasttui.GetCursorMarker()
 	}
 
-	cursorChar := "\x1b[7m" + atCursor + "\x1b[27m"
+	// Use inverse video to show cursor
+	cursorChar := "\x1b[7m" + atCursor + "\x1b[27m" // ESC[7m = reverse video, ESC[27m = normal
 	textWithCursor := beforeCursor + marker + cursorChar + afterCursor
 
+	// Calculate visual width
 	visualLength := fasttui.VisibleWidth(textWithCursor)
-	padding := strings.Repeat(" ", max(0, availableWidth-visualLength))
+	paddingCount := availableWidth - visualLength
+	if paddingCount < 0 {
+		paddingCount = 0
+	}
+	padding := strings.Repeat(" ", paddingCount)
 	line := prompt + textWithCursor + padding
 
 	return []string{line}
 }
+
 func (i *Input) HandleInput(data string) {
-	if data == "\x1b[200~" {
+	// Handle bracketed paste mode
+	// Start of paste: \x1b[200~
+	// End of paste: \x1b[201~
+
+	// Check if we're starting a bracketed paste
+	if strings.Contains(data, "\x1b[200~") {
 		i.isInPaste = true
 		i.pastedBuffer = ""
-		return
+		data = strings.ReplaceAll(data, "\x1b[200~", "")
 	}
 
-	if data == "\x1b[201~" {
-		i.isInPaste = false
-		i.handlePaste(i.pastedBuffer)
-		i.pastedBuffer = ""
-		return
-	}
-
+	// If we're in a paste, buffer the data
 	if i.isInPaste {
+		// Check if this chunk contains the end marker
 		i.pastedBuffer += data
-		return
-	}
 
-	if data == "\r" || data == "\n" {
-		if i.onSubmit != nil {
-			i.onSubmit(i.value)
+		endIndex := strings.Index(i.pastedBuffer, "\x1b[201~")
+		if endIndex != -1 {
+			// Extract the pasted content
+			pasteContent := i.pastedBuffer[:endIndex]
+
+			// Process the complete paste
+			i.handlePaste(pasteContent)
+
+			// Reset paste state
+			i.isInPaste = false
+
+			// Handle any remaining input after the paste marker
+			remaining := i.pastedBuffer[endIndex+6:] // 6 = length of \x1b[201~
+			i.pastedBuffer = ""
+			if remaining != "" {
+				i.HandleInput(remaining)
+			}
 		}
 		return
 	}
 
-	if data == "\x1b" || data == "\x03" {
+	kb := keys.GetEditorKeybindings()
+
+	// Escape/Cancel
+	if kb.Matches(data, keys.EditorActionSelectCancel) {
 		if i.onEscape != nil {
 			i.onEscape()
 		}
 		return
 	}
 
-	if data == "\x7f" || data == "\x08" {
-		if i.cursor > 0 {
-			before := i.value[:i.cursor-1]
-			after := i.value[i.cursor:]
-			i.value = before + after
-			i.cursor--
+	// Submit
+	if kb.Matches(data, keys.EditorActionSubmit) || data == "\n" {
+		if i.onSubmit != nil {
+			i.onSubmit(i.value)
 		}
 		return
 	}
 
-	if len(data) == 1 && data[0] >= 32 {
-		before := i.value[:i.cursor]
-		after := i.value[i.cursor:]
-		i.value = before + data + after
-		i.cursor++
+	// Deletion
+	if kb.Matches(data, keys.EditorActionDeleteCharBackward) {
+		if i.cursor > 0 {
+			beforeCursor := i.value[:i.cursor]
+			graphemeLength := 1
+			if len(beforeCursor) > 0 {
+				// Simple implementation: delete one rune
+				runes := []rune(beforeCursor)
+				if len(runes) > 0 {
+					graphemeLength = len(string(runes[len(runes)-1]))
+				}
+			}
+			i.value = i.value[:i.cursor-graphemeLength] + i.value[i.cursor:]
+			i.cursor -= graphemeLength
+		}
 		return
 	}
+
+	if kb.Matches(data, keys.EditorActionDeleteCharForward) {
+		if i.cursor < len(i.value) {
+			afterCursor := i.value[i.cursor:]
+			graphemeLength := 1
+			if len(afterCursor) > 0 {
+				// Simple implementation: delete one rune
+				runes := []rune(afterCursor)
+				if len(runes) > 0 {
+					graphemeLength = len(string(runes[0]))
+				}
+			}
+			i.value = i.value[:i.cursor] + i.value[i.cursor+graphemeLength:]
+		}
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionDeleteWordBackward) {
+		i.deleteWordBackwards()
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionDeleteToLineStart) {
+		i.value = i.value[i.cursor:]
+		i.cursor = 0
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionDeleteToLineEnd) {
+		i.value = i.value[:i.cursor]
+		return
+	}
+
+	// Cursor movement
+	if kb.Matches(data, keys.EditorActionCursorLeft) {
+		if i.cursor > 0 {
+			beforeCursor := i.value[:i.cursor]
+			graphemeLength := 1
+			if len(beforeCursor) > 0 {
+				runes := []rune(beforeCursor)
+				if len(runes) > 0 {
+					graphemeLength = len(string(runes[len(runes)-1]))
+				}
+			}
+			i.cursor -= graphemeLength
+		}
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionCursorRight) {
+		if i.cursor < len(i.value) {
+			afterCursor := i.value[i.cursor:]
+			graphemeLength := 1
+			if len(afterCursor) > 0 {
+				runes := []rune(afterCursor)
+				if len(runes) > 0 {
+					graphemeLength = len(string(runes[0]))
+				}
+			}
+			i.cursor += graphemeLength
+		}
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionCursorLineStart) {
+		i.cursor = 0
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionCursorLineEnd) {
+		i.cursor = len(i.value)
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionCursorWordLeft) {
+		i.moveWordBackwards()
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionCursorWordRight) {
+		i.moveWordForwards()
+		return
+	}
+
+	// Regular character input - accept printable characters including Unicode,
+	// but reject control characters (C0: 0x00-0x1F, DEL: 0x7F, C1: 0x80-0x9F)
+	hasControlChars := false
+	for _, ch := range data {
+		code := int(ch)
+		if code < 32 || code == 0x7f || (code >= 0x80 && code <= 0x9f) {
+			hasControlChars = true
+			break
+		}
+	}
+	if !hasControlChars {
+		i.value = i.value[:i.cursor] + data + i.value[i.cursor:]
+		i.cursor += len(data)
+	}
 }
+
 func (i *Input) WantsKeyRelease() bool {
 	return false
 }
+
 func (i *Input) Invalidate() {
 }
 
@@ -171,14 +309,95 @@ func (i *Input) SetOnEscape(onEscape func()) {
 }
 
 func (i *Input) handlePaste(content string) {
-	if content == "" {
+	// Clean the pasted text - remove newlines and carriage returns
+	cleanText := strings.ReplaceAll(content, "\r\n", "")
+	cleanText = strings.ReplaceAll(cleanText, "\r", "")
+	cleanText = strings.ReplaceAll(cleanText, "\n", "")
+
+	// Insert at cursor position
+	i.value = i.value[:i.cursor] + cleanText + i.value[i.cursor:]
+	i.cursor += len(cleanText)
+}
+
+func (i *Input) deleteWordBackwards() {
+	if i.cursor == 0 {
 		return
 	}
 
-	cleanText := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(content, "\r\n", ""), "\r", ""), "\n", "")
+	oldCursor := i.cursor
+	i.moveWordBackwards()
+	deleteFrom := i.cursor
+	i.cursor = oldCursor
 
-	before := i.value[:i.cursor]
-	after := i.value[i.cursor:]
-	i.value = before + cleanText + after
-	i.cursor += len(cleanText)
+	i.value = i.value[:deleteFrom] + i.value[i.cursor:]
+	i.cursor = deleteFrom
+}
+
+func (i *Input) moveWordBackwards() {
+	if i.cursor == 0 {
+		return
+	}
+
+	textBeforeCursor := i.value[:i.cursor]
+	runes := []rune(textBeforeCursor)
+
+	// Skip trailing whitespace
+	for len(runes) > 0 && fasttui.IsWhitespaceChar(string(runes[len(runes)-1])) {
+		i.cursor -= len(string(runes[len(runes)-1]))
+		runes = runes[:len(runes)-1]
+	}
+
+	if len(runes) > 0 {
+		lastRune := string(runes[len(runes)-1])
+		if fasttui.IsPunctuationChar(lastRune) {
+			// Skip punctuation run
+			for len(runes) > 0 && fasttui.IsPunctuationChar(string(runes[len(runes)-1])) {
+				i.cursor -= len(string(runes[len(runes)-1]))
+				runes = runes[:len(runes)-1]
+			}
+		} else {
+			// Skip word run
+			for len(runes) > 0 &&
+				!fasttui.IsWhitespaceChar(string(runes[len(runes)-1])) &&
+				!fasttui.IsPunctuationChar(string(runes[len(runes)-1])) {
+				i.cursor -= len(string(runes[len(runes)-1]))
+				runes = runes[:len(runes)-1]
+			}
+		}
+	}
+}
+
+func (i *Input) moveWordForwards() {
+	if i.cursor >= len(i.value) {
+		return
+	}
+
+	textAfterCursor := i.value[i.cursor:]
+	runes := []rune(textAfterCursor)
+	idx := 0
+
+	// Skip leading whitespace
+	for idx < len(runes) && fasttui.IsWhitespaceChar(string(runes[idx])) {
+		i.cursor += len(string(runes[idx]))
+		idx++
+	}
+
+	if idx < len(runes) {
+		firstRune := string(runes[idx])
+		if fasttui.IsPunctuationChar(firstRune) {
+			// Skip punctuation run
+			for idx < len(runes) && fasttui.IsPunctuationChar(string(runes[idx])) {
+				i.cursor += len(string(runes[idx]))
+				idx++
+			}
+		} else {
+			// Skip word run
+			for idx < len(runes) &&
+				!fasttui.IsWhitespaceChar(string(runes[idx])) &&
+				!fasttui.IsPunctuationChar(string(runes[idx])) {
+				i.cursor += len(string(runes[idx]))
+				idx++
+			}
+		}
+	}
 }
