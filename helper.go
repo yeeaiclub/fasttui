@@ -7,21 +7,7 @@ import (
 	"strings"
 )
 
-func (t *TUI) SetFocus(component Component) {
-	if t.focusedComponent != nil {
-		if f, ok := t.focusedComponent.(Focusable); ok {
-			f.SetFocused(false)
-		}
-	}
 
-	t.focusedComponent = component
-
-	if component != nil {
-		if f, ok := t.focusedComponent.(Focusable); ok {
-			f.SetFocused(true)
-		}
-	}
-}
 
 func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
 	entryIndex := len(t.overlayStacks)
@@ -37,7 +23,7 @@ func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), f
 		t.SetFocus(component)
 	}
 	t.terminal.HideCursor()
-	t.requestRender(false)
+	t.RequestRender(false)
 
 	hide := func() {
 		index := -1
@@ -61,7 +47,7 @@ func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), f
 			if len(t.overlayStacks) == 0 {
 				t.terminal.HideCursor()
 			}
-			t.requestRender(false)
+			t.RequestRender(false)
 		}
 	}
 
@@ -96,7 +82,7 @@ func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), f
 				t.SetFocus(component)
 			}
 		}
-		t.requestRender(false)
+		t.RequestRender(false)
 	}
 
 	isHidden := func() bool {
@@ -129,7 +115,7 @@ func (t *TUI) HideOverlay() {
 	if len(t.overlayStacks) == 0 {
 		t.terminal.HideCursor()
 	}
-	t.requestRender(false)
+	t.RequestRender(false)
 }
 
 func (t *TUI) HasOverlay() bool {
@@ -172,7 +158,7 @@ func (t *TUI) SetShowHardwareCursor(enabled bool) {
 	if !enabled {
 		t.terminal.HideCursor()
 	}
-	t.requestRender(false)
+	t.RequestRender(false)
 }
 
 func (t *TUI) SetClearOnShrink(enabled bool) {

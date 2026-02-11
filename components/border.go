@@ -15,7 +15,7 @@ func NewDynamicBorder(color func(string) string) *DynamicBorder {
 
 func (d *DynamicBorder) Render(width int) []string {
 	line := ""
-	for i := 0; i < max(0, width); i++ {
+	for range max(0, width) {
 		line += "─"
 	}
 	return []string{d.color(line)}

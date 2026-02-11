@@ -49,6 +49,18 @@ func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 	return t
 }
 
+func (t *TUI) start() error {
+	t.stopped = false
+	return t.terminal.Start(
+		func(data string) {
+			t.HandleInput(data)
+		},
+		func() {
+			t.RequestRender(false)
+		},
+	)
+}
+
 func (t *TUI) RequestRender(force bool) {
 	if force {
 		t.previousLines = nil
@@ -68,9 +80,20 @@ func (t *TUI) RequestRender(force bool) {
 	}
 }
 
-// requestRender is an internal alias for backward compatibility
-func (t *TUI) requestRender(force bool) {
-	t.RequestRender(force)
+func (t *TUI) SetFocus(component Component) {
+	if t.focusedComponent != nil {
+		if f, ok := t.focusedComponent.(Focusable); ok {
+			f.SetFocused(false)
+		}
+	}
+
+	t.focusedComponent = component
+
+	if component != nil {
+		if f, ok := t.focusedComponent.(Focusable); ok {
+			f.SetFocused(true)
+		}
+	}
 }
 
 func (t *TUI) HandleInput(data string) {
@@ -104,7 +127,7 @@ func (t *TUI) HandleInput(data string) {
 			return
 		}
 		t.focusedComponent.HandleInput(data)
-		t.requestRender(false)
+		t.RequestRender(false)
 	}
 }
 
@@ -184,18 +207,6 @@ func (t *TUI) renderLoop() {
 	}
 }
 
-func (t *TUI) start() error {
-	t.stopped = false
-	return t.terminal.Start(
-		func(data string) {
-			t.HandleInput(data)
-		},
-		func() {
-			t.requestRender(false)
-		},
-	)
-}
-
 func (t *TUI) Start() {
 	t.start()
 	go t.renderLoop()
@@ -220,7 +231,7 @@ func (t *TUI) parseCellSizeResponse() string {
 
 		if err1 == nil && err2 == nil && heightPx > 0 && widthPx > 0 {
 			t.Invalidate()
-			t.requestRender(false)
+			t.RequestRender(false)
 
 			t.inputBuffer.Reset()
 			t.cellSizeQueryPending = false
@@ -283,26 +294,7 @@ func (t *TUI) doRender() {
 	}
 
 	// Find first and last changed lines
-	firstChanged := -1
-	lastChanged := -1
-	maxLines := max(len(newLines), len(t.previousLines))
-	for i := range maxLines {
-		oldLine := ""
-		newLine := ""
-		if i < len(t.previousLines) {
-			oldLine = t.previousLines[i]
-		}
-		if i < len(newLines) {
-			newLine = newLines[i]
-		}
-
-		if oldLine != newLine {
-			if firstChanged == -1 {
-				firstChanged = i
-			}
-			lastChanged = i
-		}
-	}
+	firstChanged, lastChanged := t.findChangedLineRange(newLines)
 
 	appendedLines := len(newLines) > len(t.previousLines)
 	if appendedLines {
@@ -541,6 +533,30 @@ func (t *TUI) doRender() {
 	t.previousWidth = width
 }
 
+func (t *TUI) findChangedLineRange(newLines []string) (int, int) {
+	firstChanged := -1
+	lastChanged := -1
+	maxLines := max(len(newLines), len(t.previousLines))
+	for i := range maxLines {
+		oldLine := ""
+		newLine := ""
+		if i < len(t.previousLines) {
+			oldLine = t.previousLines[i]
+		}
+		if i < len(newLines) {
+			newLine = newLines[i]
+		}
+
+		if oldLine != newLine {
+			if firstChanged == -1 {
+				firstChanged = i
+			}
+			lastChanged = i
+		}
+	}
+	return firstChanged, lastChanged
+}
+
 func (t *TUI) fullRender(newLines []string, height int, row int, col int, width int) func(clear bool) {
 	fullRender := func(clear bool) {
 		t.fullRedrawCount++
@@ -761,7 +777,7 @@ func (t *TUI) getCrashLogPath() string {
 	if err != nil {
 		homeDir = "."
 	}
-	return filepath.Join(homeDir, ".pi", "agent", "pi-crash.log")
+	return filepath.Join(homeDir, ".panda", "panda-crash.log")
 }
 
 func (t *TUI) writeCrashLog(path string, data string) {
