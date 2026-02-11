@@ -264,3 +264,19 @@ func (t *TUI) parseMargin(margin any) (marginTop, marginRight, marginBottom, mar
 		return 0, 0, 0, 0
 	}
 }
+
+func (t *TUI) extractCursorPosition(lines []string, height int) (int, int) {
+	viewportTop := max(0, len(lines)-height)
+	for row := len(lines) - 1; row >= viewportTop; row-- {
+		line := lines[row]
+		index := strings.Index(line, CursorMarker)
+		if index != -1 {
+			beforeMarker := line[:index]
+			// todo: 需要处理 unicode
+			col := VisibleWidth(beforeMarker)
+			lines[row] = line[:index] + line[index+len(CURSOR_MARKER):]
+			return row, col
+		}
+	}
+	return 0, 0
+}

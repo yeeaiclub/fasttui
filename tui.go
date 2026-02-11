@@ -1,9 +1,12 @@
 package fasttui
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yeeaiclub/fasttui/keys"
 )
@@ -242,21 +245,373 @@ func (t *TUI) doRender() {
 		return
 	}
 
-	// width, height := t.terminal.GetSize()
-	// viewportTop := max(0, t.maxLinesRendered-height)
-	// prevViewportTop := t.previousViewportTop
-	// hardwareCursorRow := t.hardwareCursorRow
+	width, height := t.terminal.GetSize()
+	viewportTop := max(0, t.maxLinesRendered-height)
+	prevViewportTop := t.previousViewportTop
+	hardwareCursorRow := t.hardwareCursorRow
 
-	// computeLineDiff := func(targetRow int) int {
-	// 	cs := hardwareCursorRow - prevViewportTop
-	// 	ct := targetRow - viewportTop
-	// 	return ct - cs
-	// }
-	// // render all components in container
-	// newLines := t.Render(width)
-	// if len(t.overlayStacks) > 0 {
-	// 	newLines = t.compositeOverlays(newLines, width, height)
-	// }
+	computeLineDiff := func(targetRow int) int {
+		cs := hardwareCursorRow - prevViewportTop
+		ct := targetRow - viewportTop
+		return ct - cs
+	}
+	// render all components in container
+	newLines := t.Render(width)
+	if len(t.overlayStacks) > 0 {
+		newLines = t.compositeOverlays(newLines, width, height)
+	}
+
+	row, col := t.extractCursorPosition(newLines, height)
+	newLines = t.applyLineRests(newLines)
+	widthChanged := t.previousWidth != 0 && t.previousWidth != width
+
+	fullRender := func(clear bool) {
+		t.fullRedrawCount++
+		var buffer strings.Builder
+		buffer.WriteString("\x1b[?2026h") // Begin synchronized output
+		if clear {
+			buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
+		}
+		for i := 0; i < len(newLines); i++ {
+			if i > 0 {
+				buffer.WriteString("\r\n")
+			}
+			buffer.WriteString(newLines[i])
+		}
+		buffer.WriteString("\x1b[?2026l") // End synchronized output
+		t.terminal.Write(buffer.String())
+		t.cursorRow = max(0, len(newLines)-1)
+		t.hardwareCursorRow = t.cursorRow
+		// Reset max lines when clearing, otherwise track growth
+		if clear {
+			t.maxLinesRendered = len(newLines)
+		} else {
+			t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
+		}
+		t.previousViewportTop = max(0, t.maxLinesRendered-height)
+		t.positionHardwareCursor(row, col, len(newLines))
+		t.previousLines = newLines
+		t.previousWidth = width
+	}
+
+	if len(t.previousLines) == 0 && !widthChanged {
+		fullRender(false)
+		return
+	}
+
+	if widthChanged {
+		fullRender(true)
+		return
+	}
+
+	// Find first and last changed lines
+	firstChanged := -1
+	lastChanged := -1
+	maxLines := max(len(newLines), len(t.previousLines))
+	for i := 0; i < maxLines; i++ {
+		oldLine := ""
+		newLine := ""
+		if i < len(t.previousLines) {
+			oldLine = t.previousLines[i]
+		}
+		if i < len(newLines) {
+			newLine = newLines[i]
+		}
+
+		if oldLine != newLine {
+			if firstChanged == -1 {
+				firstChanged = i
+			}
+			lastChanged = i
+		}
+	}
+
+	appendedLines := len(newLines) > len(t.previousLines)
+	if appendedLines {
+		if firstChanged == -1 {
+			firstChanged = len(t.previousLines)
+		}
+		lastChanged = len(newLines) - 1
+	}
+
+	appendStart := appendedLines && firstChanged == len(t.previousLines) && firstChanged > 0
+
+	// No changes - but still need to update hardware cursor position if it moved
+	if firstChanged == -1 {
+		t.positionHardwareCursor(row, col, len(newLines))
+		t.previousViewportTop = max(0, t.maxLinesRendered-height)
+		return
+	}
+
+	// All changes are in deleted lines (nothing to render, just clear)
+	if firstChanged >= len(newLines) {
+		if len(t.previousLines) > len(newLines) {
+			var buffer strings.Builder
+			buffer.WriteString("\x1b[?2026h")
+
+			// Move to end of new content (clamp to 0 for empty content)
+			targetRow := max(0, len(newLines)-1)
+			lineDiff := computeLineDiff(targetRow)
+			if lineDiff > 0 {
+				buffer.WriteString("\x1b[")
+				buffer.WriteString(strconv.Itoa(lineDiff))
+				buffer.WriteString("B")
+			} else if lineDiff < 0 {
+				buffer.WriteString("\x1b[")
+				buffer.WriteString(strconv.Itoa(-lineDiff))
+				buffer.WriteString("A")
+			}
+			buffer.WriteString("\r")
+
+			// Clear extra lines without scrolling
+			extraLines := len(t.previousLines) - len(newLines)
+			if extraLines > height {
+				fullRender(true)
+				return
+			}
+
+			if extraLines > 0 {
+				buffer.WriteString("\x1b[1B")
+			}
+			for i := 0; i < extraLines; i++ {
+				buffer.WriteString("\r\x1b[2K")
+				if i < extraLines-1 {
+					buffer.WriteString("\x1b[1B")
+				}
+			}
+			if extraLines > 0 {
+				buffer.WriteString("\x1b[")
+				buffer.WriteString(strconv.Itoa(extraLines))
+				buffer.WriteString("A")
+			}
+
+			buffer.WriteString("\x1b[?2026l")
+			t.terminal.Write(buffer.String())
+			t.cursorRow = targetRow
+			t.hardwareCursorRow = targetRow
+		}
+
+		t.positionHardwareCursor(row, col, len(newLines))
+		t.previousLines = newLines
+		t.previousWidth = width
+		t.previousViewportTop = max(0, t.maxLinesRendered-height)
+		return
+	}
+
+	// Check if firstChanged is outside the viewport
+	// Viewport is based on max lines ever rendered (terminal's working area)
+	if firstChanged < viewportTop {
+		// First change is above viewport - need full re-render
+		fullRender(true)
+		return
+	}
+
+	// Render from first changed line to end
+	// Build buffer with all updates wrapped in synchronized output
+	var buffer strings.Builder
+	buffer.WriteString("\x1b[?2026h") // Begin synchronized output
+
+	prevViewportBottom := prevViewportTop + height - 1
+	moveTargetRow := firstChanged
+	if appendStart {
+		moveTargetRow = firstChanged - 1
+	}
+
+	if moveTargetRow > prevViewportBottom {
+		currentScreenRow := max(0, min(height-1, hardwareCursorRow-prevViewportTop))
+		moveToBottom := height - 1 - currentScreenRow
+		if moveToBottom > 0 {
+			buffer.WriteString("\x1b[")
+			buffer.WriteString(strconv.Itoa(moveToBottom))
+			buffer.WriteString("B")
+		}
+
+		scroll := moveTargetRow - prevViewportBottom
+		buffer.WriteString(strings.Repeat("\r\n", scroll))
+		prevViewportTop += scroll
+		viewportTop += scroll
+		hardwareCursorRow = moveTargetRow
+	}
+
+	// Move cursor to first changed line (use hardwareCursorRow for actual position)
+	lineDiff := computeLineDiff(moveTargetRow)
+	if lineDiff > 0 {
+		buffer.WriteString("\x1b[")
+		buffer.WriteString(strconv.Itoa(lineDiff))
+		buffer.WriteString("B") // Move down
+	} else if lineDiff < 0 {
+		buffer.WriteString("\x1b[")
+		buffer.WriteString(strconv.Itoa(-lineDiff))
+		buffer.WriteString("A") // Move up
+	}
+
+	if appendStart {
+		buffer.WriteString("\r\n") // Move to column 0
+	} else {
+		buffer.WriteString("\r")
+	}
+
+	// Only render changed lines (firstChanged to lastChanged), not all lines to end
+	// This reduces flicker when only a single line changes (e.g., spinner animation)
+	renderEnd := min(lastChanged, len(newLines)-1)
+	for i := firstChanged; i <= renderEnd; i++ {
+		if i > firstChanged {
+			buffer.WriteString("\r\n")
+		}
+		buffer.WriteString("\x1b[2K") // Clear current line
+
+		line := newLines[i]
+		isImageLine := t.containsImage(line)
+		if !isImageLine && VisibleWidth(line) > width {
+			// Log all lines to crash file for debugging
+			crashLogPath := t.getCrashLogPath()
+			var crashData strings.Builder
+			crashData.WriteString("Crash at ")
+			crashData.WriteString(time.Now().Format(time.RFC3339))
+			crashData.WriteString("\n")
+			crashData.WriteString("Terminal width: ")
+			crashData.WriteString(strconv.Itoa(width))
+			crashData.WriteString("\n")
+			crashData.WriteString("Line ")
+			crashData.WriteString(strconv.Itoa(i))
+			crashData.WriteString(" visible width: ")
+			crashData.WriteString(strconv.Itoa(VisibleWidth(line)))
+			crashData.WriteString("\n\n")
+			crashData.WriteString("=== All rendered lines ===\n")
+			for idx, l := range newLines {
+				crashData.WriteString("[")
+				crashData.WriteString(strconv.Itoa(idx))
+				crashData.WriteString("] (w=")
+				crashData.WriteString(strconv.Itoa(VisibleWidth(l)))
+				crashData.WriteString(") ")
+				crashData.WriteString(l)
+				crashData.WriteString("\n")
+			}
+
+			t.writeCrashLog(crashLogPath, crashData.String())
+
+			// Clean up terminal state before panicking
+			t.Stop()
+
+			var errorMsg strings.Builder
+			errorMsg.WriteString("Rendered line ")
+			errorMsg.WriteString(strconv.Itoa(i))
+			errorMsg.WriteString(" exceeds terminal width (")
+			errorMsg.WriteString(strconv.Itoa(VisibleWidth(line)))
+			errorMsg.WriteString(" > ")
+			errorMsg.WriteString(strconv.Itoa(width))
+			errorMsg.WriteString(").\n\n")
+			errorMsg.WriteString("This is likely caused by a custom TUI component not truncating its output.\n")
+			errorMsg.WriteString("Use VisibleWidth() to measure and truncate lines.\n\n")
+			errorMsg.WriteString("Debug log written to: ")
+			errorMsg.WriteString(crashLogPath)
+
+			panic(errorMsg.String())
+		}
+		buffer.WriteString(line)
+	}
+
+	// Track where cursor ended up after rendering
+	finalCursorRow := renderEnd
+
+	// If we had more lines before, clear them and move cursor back
+	if len(t.previousLines) > len(newLines) {
+		// Move to end of new content first if we stopped before it
+		if renderEnd < len(newLines)-1 {
+			moveDown := len(newLines) - 1 - renderEnd
+			buffer.WriteString("\x1b[")
+			buffer.WriteString(strconv.Itoa(moveDown))
+			buffer.WriteString("B")
+			finalCursorRow = len(newLines) - 1
+		}
+
+		extraLines := len(t.previousLines) - len(newLines)
+		for i := len(newLines); i < len(t.previousLines); i++ {
+			buffer.WriteString("\r\n\x1b[2K")
+		}
+
+		// Move cursor back to end of new content
+		buffer.WriteString("\x1b[")
+		buffer.WriteString(strconv.Itoa(extraLines))
+		buffer.WriteString("A")
+	}
+
+	buffer.WriteString("\x1b[?2026l") // End synchronized output
+
+	// Debug logging if enabled
+	if os.Getenv("PI_TUI_DEBUG") == "1" {
+		t.writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
+			renderEnd, row, col, height, newLines)
+	}
+
+	// Write entire buffer at once
+	t.terminal.Write(buffer.String())
+
+	// Track cursor position for next render
+	// cursorRow tracks end of content (for viewport calculation)
+	// hardwareCursorRow tracks actual terminal cursor position (for movement)
+	t.cursorRow = max(0, len(newLines)-1)
+	t.hardwareCursorRow = finalCursorRow
+
+	// Track terminal's working area (grows but doesn't shrink unless cleared)
+	t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
+	t.previousViewportTop = max(0, t.maxLinesRendered-height)
+
+	// Position hardware cursor for IME
+	t.positionHardwareCursor(row, col, len(newLines))
+	t.previousLines = newLines
+	t.previousWidth = width
+}
+
+func (t *TUI) writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
+	renderEnd, cursorRow, cursorCol, height int, newLines []string) {
+	debugDir := "/tmp/tui"
+	os.MkdirAll(debugDir, 0755)
+
+	timestamp := time.Now().UnixNano() / int64(time.Millisecond)
+	debugPath := filepath.Join(debugDir, "render-"+strconv.FormatInt(timestamp, 10)+".log")
+
+	var debugData strings.Builder
+	debugData.WriteString("firstChanged: ")
+	debugData.WriteString(strconv.Itoa(firstChanged))
+	debugData.WriteString("\nviewportTop: ")
+	debugData.WriteString(strconv.Itoa(viewportTop))
+	debugData.WriteString("\ncursorRow: ")
+	debugData.WriteString(strconv.Itoa(t.cursorRow))
+	debugData.WriteString("\nheight: ")
+	debugData.WriteString(strconv.Itoa(height))
+	debugData.WriteString("\nhardwareCursorRow: ")
+	debugData.WriteString(strconv.Itoa(hardwareCursorRow))
+	debugData.WriteString("\nrenderEnd: ")
+	debugData.WriteString(strconv.Itoa(renderEnd))
+	debugData.WriteString("\nfinalCursorRow: ")
+	debugData.WriteString(strconv.Itoa(finalCursorRow))
+	debugData.WriteString("\ncursorPos: row=")
+	debugData.WriteString(strconv.Itoa(cursorRow))
+	debugData.WriteString(" col=")
+	debugData.WriteString(strconv.Itoa(cursorCol))
+	debugData.WriteString("\nnewLines.length: ")
+	debugData.WriteString(strconv.Itoa(len(newLines)))
+	debugData.WriteString("\npreviousLines.length: ")
+	debugData.WriteString(strconv.Itoa(len(t.previousLines)))
+	debugData.WriteString("\n\n=== newLines ===\n")
+	for i, line := range newLines {
+		debugData.WriteString("[")
+		debugData.WriteString(strconv.Itoa(i))
+		debugData.WriteString("] ")
+		debugData.WriteString(line)
+		debugData.WriteString("\n")
+	}
+	debugData.WriteString("\n=== previousLines ===\n")
+	for i, line := range t.previousLines {
+		debugData.WriteString("[")
+		debugData.WriteString(strconv.Itoa(i))
+		debugData.WriteString("] ")
+		debugData.WriteString(line)
+		debugData.WriteString("\n")
+	}
+
+	os.WriteFile(debugPath, []byte(debugData.String()), 0644)
 }
 
 func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
@@ -356,96 +711,27 @@ func (t *TUI) compositeLineAt(baseLine string, overlayLine string, col int, over
 	return before + overlayLine + after
 }
 
-func (t *TUI) getScope(newLines []string) (int, int) {
-	var (
-		firstChanged = -1
-		lastChanged  = -1
-	)
-	maxLines := max(len(newLines), len(t.previousLines))
-	for i := range maxLines {
-		oldLine := ""
-		newLine := ""
-		if i < len(t.previousLines) {
-			oldLine = t.previousLines[i]
-		}
-		if i < len(newLines) {
-			newLine = newLines[i]
-		}
-
-		if oldLine != newLine {
-			if firstChanged == -1 {
-				firstChanged = i
-			}
-			lastChanged = i
-		}
-	}
-	appendLines := len(newLines) > len(t.previousLines)
-	if appendLines {
-		if firstChanged == -1 {
-			firstChanged = len(t.previousLines)
-		}
-		lastChanged = len(newLines) - 1
-	}
-
-	//appendStart := appendLines && firstChanged == len(t.previousLines) && firstChanged > 0
-	return firstChanged, lastChanged
-}
-
-func (t *TUI) buildFullRenderBuffer(clear bool, newLines []string) string {
-	var builder strings.Builder
-	builder.WriteString("\x1b[?2026h")
-	if clear {
-		builder.WriteString("\x1b[3J\x1b[2J\x1b[H")
-	}
-	for i, line := range newLines {
-		if i > 0 {
-			builder.WriteString("\r\n")
-		}
-		builder.WriteString(line)
-	}
-	builder.WriteString("\x1b[?2026l")
-	return builder.String()
-}
-
-func (t *TUI) updateRenderState(clear bool, newLinesLen, width, height int) {
-	t.cursorRow = max(0, newLinesLen-1)
-	t.hardwareCursorRow = t.cursorRow
-	if clear {
-		t.maxLinesRendered = newLinesLen
-	} else {
-		t.maxLinesRendered = max(t.maxLinesRendered, newLinesLen)
-	}
-	t.previousViewportTop = max(0, t.maxLinesRendered-height)
-	t.positionHardwareCursor(0, 0, newLinesLen)
-	t.previousWidth = width
-}
-
-func (t *TUI) fullRender(clear bool, newLines []string, width int, height int) {
-	t.fullRedrawCount++
-	buffer := t.buildFullRenderBuffer(clear, newLines)
-	t.terminal.Write(buffer)
-	t.updateRenderState(clear, len(newLines), width, height)
-}
-
 var CURSOR_MARKER = "\x1b_pi:c\x07"
 
-func (t *TUI) extractCursorPosition(lines []string, height int) (int, int) {
-	viewportTop := max(0, len(lines)-height)
-	for row := len(lines) - 1; row >= viewportTop; row-- {
-		line := lines[row]
-		index := strings.Index(line, CursorMarker)
-		if index != -1 {
-			beforeMarker := line[:index]
-			// todo: 需要处理 unicode
-			col := VisibleWidth(beforeMarker)
-			lines[row] = line[:index] + line[index+len(CURSOR_MARKER):]
-			return row, col
-		}
-	}
-	return 0, 0
+var SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
+
+func (t *TUI) containsImage(line string) bool {
+	return strings.Contains(line, "\x1b_G") || strings.Contains(line, "\x1b]1337;File=")
 }
 
-var SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
+func (t *TUI) getCrashLogPath() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = "."
+	}
+	return filepath.Join(homeDir, ".pi", "agent", "pi-crash.log")
+}
+
+func (t *TUI) writeCrashLog(path string, data string) {
+	dir := filepath.Dir(path)
+	os.MkdirAll(dir, 0755)
+	os.WriteFile(path, []byte(data), 0644)
+}
 
 func (t *TUI) applyLineRests(lines []string) []string {
 	//todo: 需要处理图片line
