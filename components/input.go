@@ -86,15 +86,9 @@ func (i *Input) Render(width int) []string {
 		afterCursor = visibleText[cursorDisplay+1:]
 	}
 
-	// Hardware cursor marker (zero-width, emitted before fake cursor for IME positioning)
-	marker := ""
-	if i.focused {
-		marker = fasttui.GetCursorMarker()
-	}
-
 	// Use inverse video to show cursor
 	cursorChar := "\x1b[7m" + atCursor + "\x1b[27m" // ESC[7m = reverse video, ESC[27m = normal
-	textWithCursor := beforeCursor + marker + cursorChar + afterCursor
+	textWithCursor := beforeCursor + cursorChar + afterCursor
 
 	// Calculate visual width
 	visualLength := fasttui.VisibleWidth(textWithCursor)
