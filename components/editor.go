@@ -35,4 +35,5 @@ func (e *Editor) HandleInput(data string) {
 }
 
 func (e *Editor) LayoutText(width int) {
+
 }
