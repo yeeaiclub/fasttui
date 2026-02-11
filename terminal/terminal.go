@@ -5,7 +5,6 @@ import (
 	"os/signal"
 	"regexp"
 	"strconv"
-	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -54,18 +53,22 @@ func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) erro
 	p.inputHandler = onInput
 	p.resizeHandler = onResize
 
+	// Save previous state and enable raw mode
 	oldState, err := term.MakeRaw(p.fd)
 	if err != nil {
 		return err
 	}
 	p.wasRaw = oldState != nil
 	p.oldState = oldState
+
+	// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 	p.print("\x1b[?2004h")
 
+	// Query and enable Kitty keyboard protocol
 	p.queryAndEnableKittyProtocol()
 
-	signal.Notify(p.resizeSignalChan, syscall.SIGWINCH)
-	go p.handleResizeSignal()
+	// signal.Notify(p.resizeSignalChan, syscall.SIGWINCH)
+	// go p.handleResizeSignal()
 
 	go p.readInputLoop()
 	return nil
@@ -105,27 +108,43 @@ func (p *ProcessTerminal) handleResizeSignal() {
 	}
 }
 
+// setupStdinBuffer sets up StdinBuffer to split batched input into individual sequences.
+// This ensures components receive single events, making matchesKey/isKeyRelease work correctly.
+//
+// Also watches for Kitty protocol response and enables it when detected.
 func (p *ProcessTerminal) setupStdinBuffer() {
 	p.buffer = NewStdinBuffer()
+
+	// Forward individual sequences to the input handler
 	p.buffer.OnData = func(seq string) {
+		// Check for Kitty protocol response (only if not already enabled)
 		if !p.isKittyProtocolActive {
 			match := kittyResponsePattern.FindStringSubmatch(seq)
 			if len(match) > 1 {
 				p.isKittyProtocolActive = true
 
+				// Enable Kitty keyboard protocol (push flags)
+				// Flag 1 = disambiguate escape codes
+				// Flag 2 = report event types (press/repeat/release)
+				// Flag 4 = report alternate keys (shifted key, base layout key)
+				// Base layout key enables shortcuts to work with non-Latin keyboard layouts
 				p.print("\x1b[>7u")
-				return
+				return // Don't forward protocol response to TUI
 			}
 		}
 		if p.inputHandler != nil {
 			p.inputHandler(seq)
 		}
 	}
+
+	// Re-wrap paste content with bracketed paste markers for existing editor handling
 	p.buffer.OnPaste = func(paste string) {
 		if p.inputHandler != nil {
 			p.inputHandler("\x1b[200~" + paste + "\x1b[201~")
 		}
 	}
+
+	// Handler that pipes stdin data through the buffer
 	p.stdinDataBuffer = func(data string) {
 		if p.buffer != nil {
 			p.buffer.Process(data)
@@ -133,6 +152,12 @@ func (p *ProcessTerminal) setupStdinBuffer() {
 	}
 }
 
+// queryAndEnableKittyProtocol queries terminal for Kitty keyboard protocol support and enables if available.
+//
+// Sends CSI ? u to query current flags. If terminal responds with CSI ? <flags> u,
+// it supports the protocol and we enable it with CSI > 7 u.
+//
+// The response is detected in setupStdinBuffer's data handler.
 func (p *ProcessTerminal) queryAndEnableKittyProtocol() {
 	p.setupStdinBuffer()
 	p.print("\x1b[?u")
@@ -174,12 +199,27 @@ func (p *ProcessTerminal) DrainInput(maxMs int, idleMs int) error {
 }
 
 func (p *ProcessTerminal) Stop() {
+	// Disable bracketed paste mode
 	p.print("\x1b[?2004l")
-	if p.IsKittyProtocolActive() {
-		p.print("\x1b[>7l")
+
+	// Disable Kitty keyboard protocol (pop the flags we pushed) - only if we enabled it
+	if p.isKittyProtocolActive {
+		p.print("\x1b[<u")
+		p.isKittyProtocolActive = false
 	}
 
-	if p.wasRaw {
+	// Clean up StdinBuffer
+	if p.buffer != nil {
+		p.buffer = nil
+	}
+
+	// Remove event handlers
+	p.stdinDataBuffer = nil
+	p.inputHandler = nil
+	p.resizeHandler = nil
+
+	// Restore raw mode state
+	if p.oldState != nil {
 		err := term.Restore(p.fd, p.oldState)
 		if err != nil {
 			return
@@ -213,7 +253,7 @@ func (p *ProcessTerminal) ShowCursor() {
 }
 
 func (p *ProcessTerminal) ClearLine() {
-	p.print("\x1b[2K")
+	p.print("\x1b[K")
 }
 
 func (p *ProcessTerminal) ClearFromCursor() {

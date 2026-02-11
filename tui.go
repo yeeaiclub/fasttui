@@ -1,7 +1,6 @@
 package fasttui
 
 import (
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -32,14 +31,14 @@ type TUI struct {
 	cellSizeQueryPending bool
 	inputBuffer          strings.Builder
 
-	overlayStacks []OverlayStack
+	overlayStacks []Overlay
 	clearOnShrink bool
 }
 
 func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 	t := &TUI{
 		renderChan:         make(chan struct{}, 1),
-		overlayStacks:      make([]OverlayStack, 0),
+		overlayStacks:      make([]Overlay, 0),
 		terminal:           terminal,
 		showHardwareCursor: showHardwareCursor,
 		previousLines:      nil,
@@ -76,7 +75,7 @@ func (t *TUI) HandleInput(data string) {
 		data = filtered
 	}
 
-	var focusedOverlay *OverlayStack
+	var focusedOverlay *Overlay
 	for i := range t.overlayStacks {
 		if t.overlayStacks[i].component == t.focusedComponent {
 			focusedOverlay = &t.overlayStacks[i]
@@ -170,28 +169,6 @@ func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, ter
 	}
 }
 
-func (t *TUI) parseMargin(margin any) (marginTop, marginRight, marginBottom, marginLeft int) {
-	if margin == nil {
-		return 0, 0, 0, 0
-	}
-
-	switch v := margin.(type) {
-	case int:
-		return max(0, v), max(0, v), max(0, v), max(0, v)
-	case map[string]int:
-		return max(0, v["top"]), max(0, v["right"]), max(0, v["bottom"]), max(0, v["left"])
-	default:
-		return 0, 0, 0, 0
-	}
-}
-
-func (t *TUI) parseSizeValue(value int, total int) int {
-	if value <= 0 {
-		return 0
-	}
-	return value
-}
-
 func (t *TUI) renderLoop() {
 	for range t.renderChan {
 		t.renderRequested = false
@@ -260,249 +237,123 @@ func (t *TUI) parseCellSizeResponse() string {
 	return result
 }
 
-type renderContext struct {
-	width             int
-	height            int
-	viewportTop       int
-	prevViewportTop   int
-	hardwareCursorRaw int
-}
-
-func (t *TUI) newRenderContext() renderContext {
-	width, height := t.terminal.GetSize()
-	return renderContext{
-		width:             width,
-		height:            height,
-		viewportTop:       max(0, t.maxLinesRendered-height),
-		prevViewportTop:   t.previousViewportTop,
-		hardwareCursorRaw: t.hardwareCursorRow,
-	}
-}
-
-func (ctx *renderContext) computeLineDiff(targetRow int) int {
-	cs := ctx.hardwareCursorRaw - ctx.prevViewportTop
-	ts := targetRow - ctx.viewportTop
-	return ts - cs
-}
-
 func (t *TUI) doRender() {
-	println("------>")
 	if t.stopped {
 		return
 	}
 
-	ctx := t.newRenderContext()
-	newLines := t.Render(ctx.width)
-	cursorRow, cursorCol := t.extractCursorPosition(newLines, ctx.height)
-	widthChanged := t.previousWidth != 0 && t.previousWidth != ctx.width
+	// width, height := t.terminal.GetSize()
+	// viewportTop := max(0, t.maxLinesRendered-height)
+	// prevViewportTop := t.previousViewportTop
+	// hardwareCursorRow := t.hardwareCursorRow
 
-	if t.shouldFullRenderInit(widthChanged) {
-		t.fullRender(widthChanged, newLines, ctx.width, ctx.height)
-		return
-	}
-
-	firstChanged, lastChanged := t.prepareRenderScope(newLines)
-
-	if firstChanged == -1 {
-		t.updateViewportOnly(ctx, cursorRow, cursorCol, len(newLines))
-		return
-	}
-
-	if firstChanged >= len(newLines) {
-		t.handleLineDeletion(ctx, newLines, cursorRow, cursorCol)
-		return
-	}
-
-	if t.shouldFullRender(ctx, firstChanged) {
-		t.fullRender(true, newLines, ctx.width, ctx.height)
-		return
-	}
-
-	t.incrementalRender(ctx, newLines, firstChanged, lastChanged, cursorRow, cursorCol)
+	// computeLineDiff := func(targetRow int) int {
+	// 	cs := hardwareCursorRow - prevViewportTop
+	// 	ct := targetRow - viewportTop
+	// 	return ct - cs
+	// }
+	// // render all components in container
+	// newLines := t.Render(width)
+	// if len(t.overlayStacks) > 0 {
+	// 	newLines = t.compositeOverlays(newLines, width, height)
+	// }
 }
 
-func (t *TUI) shouldFullRenderInit(widthChanged bool) bool {
-	if t.previousLines == nil {
-		t.previousLines = []string{}
+func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
+	if len(t.overlayStacks) == 0 {
+		return newLines
 	}
-	return len(t.previousLines) == 0 || widthChanged
-}
 
-func (t *TUI) prepareRenderScope(newLines []string) (firstChanged, lastChanged int) {
-	firstChanged, lastChanged = t.getScope(newLines)
-	appendedLines := len(newLines) > len(t.previousLines)
-	if appendedLines {
-		if firstChanged == -1 {
-			firstChanged = len(t.previousLines)
+	result := make([]string, len(newLines))
+	copy(result, newLines)
+
+	type renderedOverlay struct {
+		overlayLines []string
+		row          int
+		col          int
+		w            int
+	}
+
+	rendered := make([]renderedOverlay, 0)
+	minLinesNeeded := len(result)
+
+	for i := range t.overlayStacks {
+		entry := &t.overlayStacks[i]
+		if !t.isOverlayVisible(entry) {
+			continue
 		}
-		lastChanged = len(newLines) - 1
-	}
-	return
-}
 
-func (t *TUI) updateViewportOnly(ctx renderContext, row, col, totalLines int) {
-	t.positionHardwareCursor(row, col, totalLines)
-	t.previousViewportTop = max(0, t.maxLinesRendered-ctx.height)
-}
+		options := entry.options
 
-func (t *TUI) handleLineDeletion(ctx renderContext, newLines []string, row int, col int) {
-	if len(t.previousLines) <= len(newLines) {
-		t.updateRenderStateAfter(ctx, newLines, row, col)
-		return
-	}
+		layout := t.ResolveOverlayLayout(options, 0, width, height)
+		overlayWidth := layout.width
+		component := entry.component
+		overlayLines := component.Render(overlayWidth)
 
-	extraLines := len(t.previousLines) - len(newLines)
-	if extraLines > ctx.height {
-		t.fullRender(true, newLines, ctx.width, ctx.height)
-		return
-	}
+		if layout.maxHeight != nil && len(overlayLines) > *layout.maxHeight {
+			overlayLines = overlayLines[:*layout.maxHeight]
+		}
 
-	t.deleteExtraLines(ctx, newLines, extraLines, row, col)
-}
+		finalLayout := t.ResolveOverlayLayout(options, len(overlayLines), width, height)
 
-func (t *TUI) deleteExtraLines(ctx renderContext, newLines []string, extraLines int, row int, col int) {
-	var builder strings.Builder
-	builder.WriteString("\x1b[?2026h")
+		rendered = append(rendered, renderedOverlay{
+			overlayLines: overlayLines,
+			row:          finalLayout.row,
+			col:          finalLayout.col,
+			w:            finalLayout.width,
+		})
 
-	targetRow := max(0, len(newLines)-1)
-	t.moveCursorToRow(ctx, &builder, targetRow)
-	builder.WriteString("\r")
-
-	if extraLines > 0 {
-		builder.WriteString("\x1b[1B")
-	}
-	for i := 0; i < extraLines; i++ {
-		builder.WriteString("\r\x1b[2K")
-		if i < extraLines-1 {
-			builder.WriteString("\x1b[1B")
+		if finalLayout.row+len(overlayLines) > minLinesNeeded {
+			minLinesNeeded = finalLayout.row + len(overlayLines)
 		}
 	}
-	if extraLines > 0 {
-		builder.WriteString(fmt.Sprintf("\x1b[%dA", extraLines))
+
+	workingHeight := max(t.maxLinesRendered, minLinesNeeded)
+
+	for len(result) < workingHeight {
+		result = append(result, "")
 	}
 
-	builder.WriteString("\x1b[?2026l")
-	t.terminal.Write(builder.String())
-	t.cursorRow = targetRow
-	t.hardwareCursorRow = targetRow
+	viewportStart := max(0, workingHeight-height)
 
-	t.updateRenderStateAfter(ctx, newLines, row, col)
-}
+	modifiedLines := make(map[int]bool)
 
-func (t *TUI) moveCursorToRow(ctx renderContext, builder *strings.Builder, targetRow int) {
-	lineDiff := ctx.computeLineDiff(targetRow)
-	if lineDiff > 0 {
-		builder.WriteString(fmt.Sprintf("\x1b[%dB", lineDiff))
-	} else if lineDiff < 0 {
-		builder.WriteString(fmt.Sprintf("\x1b[%dA", -lineDiff))
-	}
-}
-
-func (t *TUI) updateRenderStateAfter(ctx renderContext, newLines []string, row int, col int) {
-	t.positionHardwareCursor(row, col, len(newLines))
-	t.previousLines = newLines
-	t.previousWidth = ctx.width
-	t.previousViewportTop = max(0, t.maxLinesRendered-ctx.height)
-}
-
-func (t *TUI) shouldFullRender(ctx renderContext, firstChanged int) bool {
-	previousContentViewportTop := max(0, len(t.previousLines)-ctx.height)
-	return firstChanged < previousContentViewportTop
-}
-
-func (t *TUI) incrementalRender(ctx renderContext, newLines []string, firstChanged int, lastChanged int, row int, col int) {
-	appendedLines := len(newLines) > len(t.previousLines)
-	appendStart := appendedLines && firstChanged == len(t.previousLines) && firstChanged > 0
-
-	var builder strings.Builder
-	builder.WriteString("\x1b[?2026h")
-
-	t.prepareCursorForRender(ctx, &builder, firstChanged, appendStart)
-	t.renderChangedLines(ctx, &builder, newLines, firstChanged, lastChanged)
-	finalCursorRow := t.handleTrailingLines(&builder, newLines, lastChanged)
-
-	builder.WriteString("\x1b[?2026l")
-	t.terminal.Write(builder.String())
-
-	t.updateRenderStateAfterIncremental(ctx, newLines, finalCursorRow, row, col)
-}
-
-func (t *TUI) prepareCursorForRender(ctx renderContext, builder *strings.Builder, firstChanged int, appendStart bool) {
-	prevViewportBottom := ctx.prevViewportTop + ctx.height - 1
-	moveTargetRow := firstChanged
-	if appendStart {
-		moveTargetRow = firstChanged - 1
-	}
-
-	if moveTargetRow > prevViewportBottom {
-		t.scrollViewport(ctx, builder, moveTargetRow, prevViewportBottom)
-	}
-
-	t.moveCursorToRow(ctx, builder, moveTargetRow)
-
-	if appendStart {
-		builder.WriteString("\r\n")
-	} else {
-		builder.WriteString("\r")
-	}
-}
-
-func (t *TUI) scrollViewport(ctx renderContext, builder *strings.Builder, moveTargetRow, prevViewportBottom int) {
-	currentScreenRow := max(0, min(ctx.height-1, ctx.hardwareCursorRaw-ctx.prevViewportTop))
-	moveToBottom := ctx.height - 1 - currentScreenRow
-	if moveToBottom > 0 {
-		builder.WriteString(fmt.Sprintf("\x1b[%dB", moveToBottom))
-	}
-	scroll := moveTargetRow - prevViewportBottom
-	for range scroll {
-		builder.WriteString("\r\n")
-	}
-	ctx.prevViewportTop += scroll
-	ctx.viewportTop += scroll
-	ctx.hardwareCursorRaw = moveTargetRow
-}
-
-func (t *TUI) renderChangedLines(ctx renderContext, builder *strings.Builder, newLines []string, firstChanged, lastChanged int) {
-	renderEnd := min(lastChanged, len(newLines)-1)
-	for i := firstChanged; i <= renderEnd; i++ {
-		if i > firstChanged {
-			builder.WriteString("\r\n")
+	for _, ro := range rendered {
+		for i := range ro.overlayLines {
+			idx := viewportStart + ro.row + i
+			if idx >= 0 && idx < len(result) {
+				truncatedOverlayLine := ro.overlayLines[i]
+				if VisibleWidth(ro.overlayLines[i]) > ro.w {
+					truncatedOverlayLine = SliceByColumn(ro.overlayLines[i], 0, ro.w, true)
+				}
+				result[idx] = t.compositeLineAt(result[idx], truncatedOverlayLine, ro.col, ro.w, width)
+				modifiedLines[idx] = true
+			}
 		}
-		builder.WriteString("\x1b[2K")
-		line := newLines[i]
-		if VisibleWidth(line) > ctx.width {
-			panic(fmt.Sprintf("Rendered line %d exceeds terminal width (%d > %d)", i, VisibleWidth(line), ctx.width))
-		}
-		builder.WriteString(line)
 	}
+
+	for idx := range modifiedLines {
+		if VisibleWidth(result[idx]) > width {
+			result[idx] = SliceByColumn(result[idx], 0, width, true)
+		}
+	}
+
+	return result
 }
 
-func (t *TUI) handleTrailingLines(builder *strings.Builder, newLines []string, lastChanged int) int {
-	finalCursorRow := lastChanged
-	if len(t.previousLines) > len(newLines) {
-		renderEnd := min(lastChanged, len(newLines)-1)
-		if renderEnd < len(newLines)-1 {
-			moveDown := len(newLines) - 1 - renderEnd
-			builder.WriteString(fmt.Sprintf("\x1b[%dB", moveDown))
-			finalCursorRow = len(newLines) - 1
-		}
-		extraLines := len(t.previousLines) - len(newLines)
-		for i := len(newLines); i < len(t.previousLines); i++ {
-			builder.WriteString("\r\n\x1b[2K")
-		}
-		builder.WriteString(fmt.Sprintf("\x1b[%dA", extraLines))
+func (t *TUI) compositeLineAt(baseLine string, overlayLine string, col int, overlayWidth int, termWidth int) string {
+	if col >= termWidth {
+		return baseLine
 	}
-	return finalCursorRow
-}
 
-func (t *TUI) updateRenderStateAfterIncremental(ctx renderContext, newLines []string, finalCursorRow, row, col int) {
-	t.cursorRow = max(0, len(newLines)-1)
-	t.hardwareCursorRow = finalCursorRow
-	t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
-	t.previousViewportTop = max(0, t.maxLinesRendered-ctx.height)
-	t.positionHardwareCursor(row, col, len(newLines))
-	t.previousLines = newLines
-	t.previousWidth = ctx.width
+	baseWidth := VisibleWidth(baseLine)
+	if baseWidth < col {
+		padding := strings.Repeat(" ", col-baseWidth)
+		return baseLine + padding + overlayLine
+	}
+
+	before, _, after, _ := ExtractSegments(baseLine, col, col+overlayWidth, overlayWidth, false)
+	return before + overlayLine + after
 }
 
 func (t *TUI) getScope(newLines []string) (int, int) {
@@ -600,35 +451,4 @@ func (t *TUI) applyLineRests(lines []string) []string {
 	//todo: 需要处理图片line
 	//todo: 暂时不实现
 	return lines
-}
-
-func (t *TUI) positionHardwareCursor(row int, col int, totalLines int) {
-	if (row == 0 && col == 0) || totalLines <= 0 {
-		t.terminal.HideCursor()
-		return
-	}
-
-	targetRow := max(0, min(row, totalLines-1))
-	targetCol := max(0, col)
-
-	rowDelta := targetRow - t.hardwareCursorRow
-	var builder strings.Builder
-
-	if rowDelta > 0 {
-		builder.WriteString(fmt.Sprintf("\x1b[%dB", rowDelta))
-	} else if rowDelta < 0 {
-		builder.WriteString(fmt.Sprintf("\x1b[%dA", -rowDelta))
-	}
-	builder.WriteString(fmt.Sprintf("\x1b[%dG", targetCol+1))
-
-	if builder.Len() > 0 {
-		t.terminal.Write(builder.String())
-	}
-
-	t.hardwareCursorRow = targetRow
-	if t.showHardwareCursor {
-		t.terminal.ShowCursor()
-	} else {
-		t.terminal.HideCursor()
-	}
 }

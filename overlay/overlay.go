@@ -1,45 +1,6 @@
-package fasttui
+package overlay
 
-type Component interface {
-	Render(width int) []string
-	HandleInput(data string)
-	WantsKeyRelease() bool
-	Invalidate()
-}
-
-type Terminal interface {
-	Start(onInput func(data string), onResize func()) error
-	Stop()
-	Write(data string)
-	GetSize() (int, int)
-	IsKittyProtocolActive() bool
-	MoveBy(lines int)
-	HideCursor()
-	ShowCursor()
-	ClearLine()
-	ClearFromCursor()
-	ClearScreen()
-	SetTitle(title string)
-}
-
-type Focusable interface {
-	Component
-	SetFocused(bool)
-	IsFocused() bool
-}
-
-type OverlayHandle interface {
-	Hide()
-	SetHidden(hidden bool)
-	isHidden() bool
-}
-
-type Overlay struct {
-	component Component
-	options   OverlayOption
-	preFocus  Component
-	hidden    bool
-}
+import "github.com/yeeaiclub/fasttui"
 
 type OverlayAnchor string
 
@@ -74,4 +35,20 @@ type OverlayLayout struct {
 	row       int
 	col       int
 	maxHeight *int
+}
+
+func NewOverlayLayout(width int, row int, col int, maxHeight *int) *OverlayLayout {
+	return &OverlayLayout{
+		width:     width,
+		row:       row,
+		col:       col,
+		maxHeight: maxHeight,
+	}
+}
+
+type Overlay struct {
+	component fasttui.Component
+	options   OverlayOption
+	preFocus  fasttui.Component
+	hidden    bool
 }

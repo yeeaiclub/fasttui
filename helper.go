@@ -1,5 +1,12 @@
 package fasttui
 
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
 func (t *TUI) SetFocus(component Component) {
 	if t.focusedComponent != nil {
 		if f, ok := t.focusedComponent.(Focusable); ok {
@@ -17,7 +24,7 @@ func (t *TUI) SetFocus(component Component) {
 }
 
 func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
-	entry := OverlayStack{
+	entry := Overlay{
 		component: component,
 		options:   options,
 		preFocus:  t.focusedComponent,
@@ -102,7 +109,7 @@ func (t *TUI) HasOverlay() bool {
 }
 
 // isOverlayVisible check if an overlay entry is currently visible.
-func (t *TUI) isOverlayVisible(entry *OverlayStack) bool {
+func (t *TUI) isOverlayVisible(entry *Overlay) bool {
 	if entry.hidden {
 		return false
 	}
@@ -114,7 +121,7 @@ func (t *TUI) isOverlayVisible(entry *OverlayStack) bool {
 }
 
 // GetTopmostVisibleOverlay returns the topmost visible overlay, or nil if none.
-func (t *TUI) getTopmostVisibleOverlay() *OverlayStack {
+func (t *TUI) getTopmostVisibleOverlay() *Overlay {
 	for i := len(t.overlayStacks) - 1; i >= 0; i-- {
 		entry := t.overlayStacks[i]
 		if t.isOverlayVisible(&entry) {
@@ -179,4 +186,81 @@ func (t *TUI) GetFullRedraws() int {
 
 func (t *TUI) GetShowHardwareCursor() bool {
 	return t.showHardwareCursor
+}
+
+func (t *TUI) positionHardwareCursor(row int, col int, totalLines int) {
+	if (row == 0 && col == 0) || totalLines <= 0 {
+		t.terminal.HideCursor()
+		return
+	}
+
+	targetRow := max(0, min(row, totalLines-1))
+	targetCol := max(0, col)
+
+	rowDelta := targetRow - t.hardwareCursorRow
+	var builder strings.Builder
+
+	if rowDelta > 0 {
+		// move down
+		builder.WriteString(fmt.Sprintf("\x1b[%dB", rowDelta))
+	} else if rowDelta < 0 {
+		// move up
+		builder.WriteString(fmt.Sprintf("\x1b[%dA", -rowDelta))
+	}
+
+	builder.WriteString(fmt.Sprintf("\x1b[%dG", targetCol+1))
+	if builder.Len() > 0 {
+		t.terminal.Write(builder.String())
+	}
+
+	t.hardwareCursorRow = targetRow
+
+	if t.showHardwareCursor {
+		t.terminal.ShowCursor()
+	} else {
+		t.terminal.HideCursor()
+	}
+}
+
+func (t *TUI) parseSizeValue(value any, total int) int {
+	if value == nil {
+		return 0
+	}
+
+	switch v := value.(type) {
+	case int:
+		if v <= 0 {
+			return 0
+		}
+		return v
+	case string:
+		match := regexp.MustCompile(`^(\d+(?:\.\d+)?)%$`).FindStringSubmatch(v)
+		if match != nil {
+			percentage, err := strconv.ParseFloat(match[1], 64)
+			if err == nil {
+				result := int((float64(total) * percentage) / 100)
+				if result <= 0 {
+					return 0
+				}
+				return result
+			}
+		}
+	}
+
+	return 0
+}
+
+func (t *TUI) parseMargin(margin any) (marginTop, marginRight, marginBottom, marginLeft int) {
+	if margin == nil {
+		return 0, 0, 0, 0
+	}
+
+	switch v := margin.(type) {
+	case int:
+		return max(0, v), max(0, v), max(0, v), max(0, v)
+	case map[string]int:
+		return max(0, v["top"]), max(0, v["right"]), max(0, v["bottom"]), max(0, v["left"])
+	default:
+		return 0, 0, 0, 0
+	}
 }
