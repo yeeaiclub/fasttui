@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/yeeaiclub/fasttui"
-	"github.com/yeeaiclub/fasttui/keys"
 )
 
 type Input struct {
@@ -95,61 +94,54 @@ func (i *Input) Render(width int) []string {
 	return []string{line}
 }
 func (i *Input) HandleInput(data string) {
-	if strings.Contains(data, "\x1b[200~") {
+	if data == "\x1b[200~" {
 		i.isInPaste = true
 		i.pastedBuffer = ""
-		data = strings.ReplaceAll(data, "\x1b[200~", "")
+		return
+	}
+
+	if data == "\x1b[201~" {
+		i.isInPaste = false
+		i.handlePaste(i.pastedBuffer)
+		i.pastedBuffer = ""
+		return
 	}
 
 	if i.isInPaste {
 		i.pastedBuffer += data
-
-		endIndex := strings.Index(i.pastedBuffer, "\x1b[201~")
-		if endIndex != -1 {
-			pasteContent := i.pastedBuffer[:endIndex]
-
-			i.handlePaste(pasteContent)
-
-			i.isInPaste = false
-
-			remaining := i.pastedBuffer[endIndex+6:]
-			i.pastedBuffer = ""
-			if remaining != "" {
-				i.HandleInput(remaining)
-			}
-		}
 		return
 	}
 
-	kb := keys.GetEditorKeybindings()
-	if kb.Matches(data, keys.EditorActionSelectCancel) {
-		if i.onEscape != nil {
-			i.onEscape()
-		}
-		return
-	}
-
-	if kb.Matches(data, keys.EditorActionSubmit) || data == "\n" {
+	if data == "\r" || data == "\n" {
 		if i.onSubmit != nil {
 			i.onSubmit(i.value)
 		}
 		return
 	}
 
-	hasControlChars := false
-	for _, ch := range data {
-		code := int(ch)
-		if code < 32 || code == 0x7f || (code >= 0x80 && code <= 0x9f) {
-			hasControlChars = true
-			break
+	if data == "\x1b" || data == "\x03" {
+		if i.onEscape != nil {
+			i.onEscape()
 		}
+		return
 	}
 
-	if !hasControlChars {
+	if data == "\x7f" || data == "\x08" {
+		if i.cursor > 0 {
+			before := i.value[:i.cursor-1]
+			after := i.value[i.cursor:]
+			i.value = before + after
+			i.cursor--
+		}
+		return
+	}
+
+	if len(data) == 1 && data[0] >= 32 {
 		before := i.value[:i.cursor]
 		after := i.value[i.cursor:]
 		i.value = before + data + after
-		i.cursor += len(data)
+		i.cursor++
+		return
 	}
 }
 func (i *Input) WantsKeyRelease() bool {

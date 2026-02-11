@@ -20,12 +20,15 @@ func main() {
 	input.SetOnEscape(func() {
 		fmt.Println("Escape pressed")
 	})
-	tui.AddChild(input)
-	tui.SetFocus(input)
-
+	container := fasttui.NewContainer()
+	container.AddChild(input)
+	tui.AddChild(container)
 	tui.AddChild(components.NewDynamicBorder(func(s string) string { return s }))
 	tui.Start()
 
 	for true {
 	}
+	defer func() {
+		tui.Stop()
+	}()
 }

@@ -4,6 +4,10 @@ type Container struct {
 	children []Component
 }
 
+func NewContainer() *Container {
+	return &Container{}
+}
+
 func (c *Container) AddChild(component Component) {
 	c.children = append(c.children, component)
 }

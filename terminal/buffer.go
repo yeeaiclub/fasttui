@@ -1,315 +1,282 @@
 package terminal
 
 import (
-	"regexp"
 	"strings"
 )
 
 const (
 	BRACKETED_PASTE_START = "\x1b[200~"
 	BRACKETED_PASTE_END   = "\x1b[201~"
+	ESC                   = "\x1b"
 )
-
-var mouseSequenceRegex = regexp.MustCompile(`^<\d+;\d+;\d+[Mm]$`)
 
 type Event struct {
 	Type string
 	Data string
 }
 
+// ParserState represents the current state of the input parser
+type ParserState int
+
+const (
+	StateNormal ParserState = iota
+	StatePaste
+	StateEscape
+	StateCSI
+	StateOSC
+	StateDCS
+	StateAPC
+	StateSS3
+)
+
 type StdinBuffer struct {
 	OnData      func(seq string)
 	OnPaste     func(paste string)
 	evChan      chan Event
 	buffer      string
-	pasteMode   bool
+	state       ParserState
 	pasteBuffer string
 }
 
 func NewStdinBuffer() *StdinBuffer {
 	st := &StdinBuffer{
-		evChan:    make(chan Event, 100),
-		pasteMode: false,
+		evChan: make(chan Event, 100),
+		state:  StateNormal,
 	}
 	go st.ProcessEvent()
 	return st
 }
 
 func (s *StdinBuffer) Process(data string) {
+	// Normalize high-bit characters
 	var seq string
 	if len(data) == 1 && data[0] > 127 {
-		byteValue := data[0]
-		seq = "\x1b" + string(byteValue-128)
+		seq = ESC + string(data[0]-128)
 	} else {
 		seq = data
 	}
+
 	if len(seq) == 0 && len(data) == 1 {
 		s.evChan <- Event{Type: "data", Data: ""}
 		return
 	}
+
 	s.buffer += seq
+	s.processBuffer()
+}
 
-	if s.pasteMode {
-		s.pasteBuffer += s.buffer
-		s.buffer = ""
-		endIndex := strings.Index(s.pasteBuffer, BRACKETED_PASTE_END)
-		if endIndex != -1 {
-			pastedContent := s.pasteBuffer[:endIndex]
-			remaining := s.pasteBuffer[endIndex+len(BRACKETED_PASTE_END):]
-			s.pasteMode = false
-			s.pasteBuffer = ""
-			s.evChan <- Event{Type: "paste", Data: pastedContent}
-			if len(remaining) > 0 {
-				s.Process(remaining)
-			}
+func (s *StdinBuffer) processBuffer() {
+	for len(s.buffer) > 0 {
+		consumed := s.processState()
+		if !consumed {
+			break
 		}
-		return
+	}
+}
+
+func (s *StdinBuffer) processState() bool {
+	switch s.state {
+	case StateNormal:
+		return s.processNormal()
+	case StatePaste:
+		return s.processPaste()
+	case StateEscape:
+		return s.processEscape()
+	case StateCSI:
+		return s.processCSI()
+	case StateOSC:
+		return s.processOSC()
+	case StateDCS:
+		return s.processDCS()
+	case StateAPC:
+		return s.processAPC()
+	case StateSS3:
+		return s.processSS3()
+	default:
+		s.state = StateNormal
+		return true
+	}
+}
+
+func (s *StdinBuffer) processNormal() bool {
+	// Check for bracketed paste start
+	if strings.HasPrefix(s.buffer, BRACKETED_PASTE_START) {
+		s.buffer = s.buffer[len(BRACKETED_PASTE_START):]
+		s.state = StatePaste
+		s.pasteBuffer = ""
+		return true
 	}
 
-	startIndex := strings.Index(s.buffer, BRACKETED_PASTE_START)
-	if startIndex != -1 {
-		if startIndex > 0 {
-			before := s.buffer[:startIndex]
-			seqs, _ := extractCompleteSequences(before)
-			for _, seq := range seqs {
-				s.evChan <- Event{Type: "data", Data: seq}
-			}
-		}
-		s.buffer = s.buffer[startIndex+len(BRACKETED_PASTE_START):]
-		s.pasteMode = true
-		s.pasteBuffer = s.buffer
-		s.buffer = ""
-		endIndex := strings.Index(s.pasteBuffer, BRACKETED_PASTE_END)
-		if endIndex != -1 {
-			paste := s.pasteBuffer[:endIndex]
-			remaining := s.pasteBuffer[endIndex+len(BRACKETED_PASTE_END):]
-			s.pasteMode = false
-			s.pasteBuffer = ""
-			s.evChan <- Event{Type: "paste", Data: paste}
-			if len(remaining) > 0 {
-				s.Process(remaining)
-			}
-		}
-		return
+	// Check for escape sequence
+	if strings.HasPrefix(s.buffer, ESC) {
+		s.state = StateEscape
+		return true
 	}
 
-	// handle string and extract complete sequences
-	result, remaining := extractCompleteSequences(s.buffer)
-	s.buffer = remaining
+	// Regular character
+	if len(s.buffer) > 0 {
+		s.emitData(string(s.buffer[0]))
+		s.buffer = s.buffer[1:]
+		return true
+	}
 
-	for _, seq := range result {
-		s.evChan <- Event{Type: "data", Data: seq}
+	return false
+}
+
+func (s *StdinBuffer) processPaste() bool {
+	endIndex := strings.Index(s.buffer, BRACKETED_PASTE_END)
+	if endIndex != -1 {
+		s.pasteBuffer += s.buffer[:endIndex]
+		s.buffer = s.buffer[endIndex+len(BRACKETED_PASTE_END):]
+		s.emitPaste(s.pasteBuffer)
+		s.pasteBuffer = ""
+		s.state = StateNormal
+		return true
+	}
+
+	// Accumulate paste data
+	s.pasteBuffer += s.buffer
+	s.buffer = ""
+	return false
+}
+
+func (s *StdinBuffer) processEscape() bool {
+	if len(s.buffer) < 2 {
+		return false
+	}
+
+	nextChar := s.buffer[1]
+	switch nextChar {
+	case '[':
+		s.state = StateCSI
+		return true
+	case ']':
+		s.state = StateOSC
+		return true
+	case 'P':
+		s.state = StateDCS
+		return true
+	case '_':
+		s.state = StateAPC
+		return true
+	case 'O':
+		s.state = StateSS3
+		return true
+	default:
+		// Simple escape sequence (ESC + one char)
+		s.emitData(s.buffer[:2])
+		s.buffer = s.buffer[2:]
+		s.state = StateNormal
+		return true
+	}
+}
+
+func (s *StdinBuffer) processCSI() bool {
+	// CSI sequences: ESC [ ... final_byte
+	// final_byte is in range 0x40-0x7E
+	for i := 2; i < len(s.buffer); i++ {
+		ch := s.buffer[i]
+		if ch >= 0x40 && ch <= 0x7E {
+			seq := s.buffer[:i+1]
+			s.emitData(seq)
+			s.buffer = s.buffer[i+1:]
+			s.state = StateNormal
+			return true
+		}
+	}
+	return false
+}
+
+func (s *StdinBuffer) processOSC() bool {
+	// OSC sequences: ESC ] ... (ESC \ or BEL)
+	if idx := strings.Index(s.buffer, ESC+"\\"); idx != -1 {
+		s.emitData(s.buffer[:idx+2])
+		s.buffer = s.buffer[idx+2:]
+		s.state = StateNormal
+		return true
+	}
+	if idx := strings.Index(s.buffer, "\x07"); idx != -1 {
+		s.emitData(s.buffer[:idx+1])
+		s.buffer = s.buffer[idx+1:]
+		s.state = StateNormal
+		return true
+	}
+	return false
+}
+
+func (s *StdinBuffer) processDCS() bool {
+	// DCS sequences: ESC P ... ESC \
+	if idx := strings.Index(s.buffer, ESC+"\\"); idx != -1 {
+		s.emitData(s.buffer[:idx+2])
+		s.buffer = s.buffer[idx+2:]
+		s.state = StateNormal
+		return true
+	}
+	return false
+}
+
+func (s *StdinBuffer) processAPC() bool {
+	// APC sequences: ESC _ ... ESC \
+	if idx := strings.Index(s.buffer, ESC+"\\"); idx != -1 {
+		s.emitData(s.buffer[:idx+2])
+		s.buffer = s.buffer[idx+2:]
+		s.state = StateNormal
+		return true
+	}
+	return false
+}
+
+func (s *StdinBuffer) processSS3() bool {
+	// SS3 sequences: ESC O X (function keys)
+	if len(s.buffer) >= 3 {
+		s.emitData(s.buffer[:3])
+		s.buffer = s.buffer[3:]
+		s.state = StateNormal
+		return true
+	}
+	return false
+}
+
+func (s *StdinBuffer) emitData(data string) {
+	select {
+	case s.evChan <- Event{Type: "data", Data: data}:
+	default:
+		// Channel full, drop event (shouldn't happen with buffered channel)
+	}
+}
+
+func (s *StdinBuffer) emitPaste(data string) {
+	select {
+	case s.evChan <- Event{Type: "paste", Data: data}:
+	default:
+		// Channel full, drop event
 	}
 }
 
 func (s *StdinBuffer) ProcessEvent() {
-	for {
-		select {
-		case seq := <-s.evChan:
-			if seq.Type == "data" {
-				s.OnData(seq.Data)
-			} else if seq.Type == "paste" {
-				s.OnPaste(seq.Data)
+	for ev := range s.evChan {
+		if ev.Type == "data" {
+			if s.OnData != nil {
+				s.OnData(ev.Data)
 			}
-		default:
+		} else if ev.Type == "paste" {
+			if s.OnPaste != nil {
+				s.OnPaste(ev.Data)
+			}
 		}
 	}
+}
+
+func (s *StdinBuffer) Close() {
+	close(s.evChan)
 }
 
 func (s *StdinBuffer) Flush() []string {
 	return nil
 }
 
-func (s *StdinBuffer) clear() {
+func (s *StdinBuffer) Clear() {
 	s.buffer = ""
-	s.pasteMode = false
+	s.state = StateNormal
 	s.pasteBuffer = ""
-}
-
-func extractCompleteSequences(buffer string) ([]string, string) {
-	var sequences []string
-	var pos int
-
-	for pos < len(buffer) {
-		if buffer[pos] == ESC[0] {
-			seq, newPos := extractEscapeSequence(buffer, pos)
-			if seq == "" {
-				return sequences, buffer[pos:]
-			}
-			sequences = append(sequences, seq)
-			pos = newPos
-		} else {
-			sequences = append(sequences, string(buffer[pos]))
-			pos++
-		}
-	}
-
-	return sequences, ""
-}
-
-func extractEscapeSequence(buffer string, pos int) (string, int) {
-	for end := pos + 1; end <= len(buffer); end++ {
-		candidate := buffer[pos:end]
-		status := isCompleteSequence(candidate)
-
-		switch status {
-		case "complete":
-			return candidate, end
-		case "incomplete":
-			continue
-		default:
-			return candidate, end
-		}
-	}
-	return "", pos
-}
-
-func isCompleteSequence(candidate string) string {
-	if !strings.HasPrefix(candidate, ESC) {
-		return "not-escape"
-	}
-	if len(candidate) == 1 {
-		return "incomplete"
-	}
-	afterEsc := candidate[1:]
-
-	if strings.HasPrefix(afterEsc, "[") {
-		if strings.HasPrefix(afterEsc, "[M") {
-			if len(afterEsc) >= 6 {
-				return "complete"
-			}
-			return "incomplete"
-		}
-		return isCompleteCsiSequence(candidate)
-	}
-
-	if strings.HasPrefix(afterEsc, "]") {
-		return isCompleteOscSequence(candidate)
-	}
-
-	if strings.HasPrefix(afterEsc, "P") {
-		return isCompleteDcsSequence(candidate)
-	}
-
-	if strings.HasPrefix(afterEsc, "_") {
-		return isCompleteApcSequence(candidate)
-	}
-
-	if strings.HasPrefix(afterEsc, "O") {
-		if len(afterEsc) >= 2 {
-			return "complete"
-		}
-		return "incomplete"
-	}
-
-	if len(afterEsc) == 1 {
-		return "complete"
-	}
-
-	return "complete"
-}
-
-const ESC = "\x1b"
-
-func isCompleteCsiSequence(data string) string {
-	if !strings.HasPrefix(data, ESC+"[") {
-		return "complete"
-	}
-
-	if len(data) < 3 {
-		return "incomplete"
-	}
-
-	payload := data[2:]
-	if len(payload) == 0 {
-		return "incomplete"
-	}
-
-	lastChar := payload[len(payload)-1]
-	lastCharCode := byte(lastChar)
-
-	if lastCharCode >= 0x40 && lastCharCode <= 0x7e {
-		if strings.HasPrefix(payload, "<") {
-			return checkMouseSequence(payload)
-		}
-		return "complete"
-	}
-
-	return "incomplete"
-}
-
-func checkMouseSequence(payload string) string {
-	if mouseSequenceRegex.MatchString(payload) {
-		return "complete"
-	}
-
-	if len(payload) < 4 {
-		return "incomplete"
-	}
-
-	lastChar := payload[len(payload)-1]
-	if lastChar != 'M' && lastChar != 'm' {
-		return "incomplete"
-	}
-
-	parts := strings.Split(payload[1:len(payload)-1], ";")
-	if len(parts) != 3 {
-		return "incomplete"
-	}
-
-	for _, part := range parts {
-		if !isAllDigits(part) {
-			return "incomplete"
-		}
-	}
-
-	return "complete"
-}
-
-func isAllDigits(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func isCompleteOscSequence(data string) string {
-	if !strings.HasPrefix(data, ESC+"]") {
-		return "complete"
-	}
-
-	if strings.HasSuffix(data, ESC+"\\") || strings.HasSuffix(data, "\x07") {
-		return "complete"
-	}
-
-	return "incomplete"
-}
-
-func isCompleteDcsSequence(data string) string {
-	if !strings.HasPrefix(data, ESC+"P") {
-		return "complete"
-	}
-
-	if strings.HasSuffix(data, ESC+"\\") {
-		return "complete"
-	}
-
-	return "incomplete"
-}
-
-func isCompleteApcSequence(data string) string {
-	if !strings.HasPrefix(data, ESC+"_") {
-		return "complete"
-	}
-
-	if strings.HasSuffix(data, ESC+"\\") {
-		return "complete"
-	}
-
-	return "incomplete"
 }

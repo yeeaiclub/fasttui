@@ -32,7 +32,7 @@ func TestProcessTerminal(t *testing.T) {
 
 	term.Write("Press any key to test...\r\n")
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		time.Sleep(1 * time.Second)
 	}
 
