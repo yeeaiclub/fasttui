@@ -36,9 +36,11 @@ type SelectList struct {
 
 func NewSelectList(items []SelectItem, maxVisible int, theme SelectListTheme) *SelectList {
 	return &SelectList{
-		items:      items,
-		maxVisible: maxVisible,
-		theme:      theme,
+		items:         items,
+		filteredItems: items,
+		selectedIndex: 0,
+		maxVisible:    maxVisible,
+		theme:         theme,
 	}
 }
 
@@ -79,62 +81,84 @@ func (s *SelectList) Render(width int) []string {
 func (s *SelectList) handleSelect(item SelectItem, width int) string {
 	prefix := "→ "
 	prefixLen := len(prefix)
-	dispaly := item.Value
-	if item.Label == "" {
-		dispaly = item.Label
+
+	display := item.Value
+	if item.Label != "" {
+		display = item.Label
 	}
 
-	if width < 40 {
+	descLine := ""
+	if item.Description != "" {
+		descLine = normalizeToSingleLine(item.Description)
+	}
+
+	if width < 40 || descLine == "" {
 		maxWidth := width - prefixLen - 2
-		return fmt.Sprintf("%s %s", prefix, fasttui.TruncateToWidth(dispaly, maxWidth, "", false))
+		return fmt.Sprintf("%s %s", prefix, fasttui.TruncateToWidth(display, maxWidth, "", false))
 	}
 
 	maxValueWidth := min(30, width-prefixLen-4)
-	truncatedValue := fasttui.TruncateToWidth(dispaly, maxValueWidth, "", false)
+	truncatedValue := fasttui.TruncateToWidth(display, maxValueWidth, "", false)
 	spacing := strings.Repeat(" ", max(1, 32-len(truncatedValue)))
 	start := prefixLen + len(truncatedValue) + len(spacing)
-	remingWidth := width - start - 2
-	if remingWidth > 10 {
-		desc := fasttui.TruncateToWidth(dispaly, remingWidth, "", false)
+	remainingWidth := width - start - 2
+
+	if remainingWidth > 10 && descLine != "" {
+		desc := fasttui.TruncateToWidth(descLine, remainingWidth, "", false)
 		descText := s.theme.Description(spacing + desc)
 		return prefix + truncatedValue + descText
 	}
 	maxWidth := width - len(prefix) - 2
-	return prefix + fasttui.TruncateToWidth(dispaly, maxWidth, "", false)
+	return prefix + fasttui.TruncateToWidth(display, maxWidth, "", false)
 }
 
 func (s *SelectList) handleNoSelect(item SelectItem, width int) string {
 	prefix := "  "
 	prefixLen := len(prefix)
-	dispaly := item.Value
-	if item.Label == "" {
-		dispaly = item.Label
+	display := item.Value
+	if item.Label != "" {
+		display = item.Label
 	}
 
-	if width < 40 {
+	descLine := ""
+	if item.Description != "" {
+		descLine = normalizeToSingleLine(item.Description)
+	}
+
+	if descLine == "" || width < 40 {
 		maxWidth := width - len(prefix) - 2
-		line := prefix + fasttui.TruncateToWidth(dispaly, maxWidth, "", false)
+		line := prefix + fasttui.TruncateToWidth(display, maxWidth, "", false)
 		return line
 	}
 
 	maxValueWidth := min(30, width-prefixLen-4)
-	truncatedValue := fasttui.TruncateToWidth(dispaly, maxValueWidth, "", false)
+	truncatedValue := fasttui.TruncateToWidth(display, maxValueWidth, "", false)
 	spacing := strings.Repeat(" ", max(1, 32-len(truncatedValue)))
 
 	start := prefixLen + len(truncatedValue) + len(spacing)
-	remmingWidth := width - start - 2
+	remainingWidth := width - start - 2
 
-	if remmingWidth > 10 {
-		desc := fasttui.TruncateToWidth(dispaly, remmingWidth, "", false)
+	if remainingWidth > 10 && descLine != "" {
+		desc := fasttui.TruncateToWidth(descLine, remainingWidth, "", false)
 		descText := s.theme.Description(spacing + desc)
 		return prefix + truncatedValue + descText
 	}
 
 	maxWidth := width - len(prefix) - 2
-	return prefix + fasttui.TruncateToWidth(dispaly, maxWidth, "", false)
+	return prefix + fasttui.TruncateToWidth(display, maxWidth, "", false)
 }
 
 func (s *SelectList) HandleInput(keyData string) {
+	if len(s.filteredItems) == 0 {
+		kb := keys.GetEditorKeybindings()
+		if kb.Matches(keyData, keys.EditorActionSelectCancel) {
+			if s.onCancel != nil {
+				s.onCancel()
+			}
+		}
+		return
+	}
+
 	kb := keys.GetEditorKeybindings()
 	if kb.Matches(keyData, keys.EditorActionSelectUp) {
 		if s.selectedIndex == 0 {
