@@ -132,12 +132,12 @@ func (t *TUI) HandleInput(data string) {
 }
 
 func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, termWidth int, termHeight int) OverlayLayout {
-	marginTop, marginRight, marginBottom, marginLeft := t.parseMargin(options.Margin)
+	marginTop, marginRight, marginBottom, marginLeft := parseMargin(options.Margin)
 
 	availWidth := max(1, termWidth-marginLeft-marginRight)
 	availHeight := max(1, termHeight-marginTop-marginBottom)
 
-	width := t.parseSizeValue(options.Width, termWidth)
+	width := parseSizeValue(options.Width, termWidth)
 	if width == 0 {
 		width = min(80, availWidth)
 	}
@@ -148,7 +148,7 @@ func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, ter
 
 	var maxHeight *int
 	if options.MaxHeight > 0 {
-		maxHeightVal := t.parseSizeValue(options.MaxHeight, termHeight)
+		maxHeightVal := parseSizeValue(options.MaxHeight, termHeight)
 		if maxHeightVal > 0 {
 			maxHeightVal = max(1, min(maxHeightVal, availHeight))
 			maxHeight = &maxHeightVal
@@ -262,6 +262,7 @@ func (t *TUI) doRender() {
 	}
 
 	width, height := t.terminal.GetSize()
+
 	viewportTop := max(0, t.maxLinesRendered-height)
 	prevViewportTop := t.previousViewportTop
 	hardwareCursorRow := t.hardwareCursorRow
@@ -277,8 +278,8 @@ func (t *TUI) doRender() {
 		newLines = t.compositeOverlays(newLines, width, height)
 	}
 
-	row, col := t.extractCursorPosition(newLines, height)
-	newLines = t.applyLineRests(newLines)
+	row, col := extractCursorPosition(newLines, height)
+	newLines = applyLineRests(newLines)
 	widthChanged := t.previousWidth != 0 && t.previousWidth != width
 
 	fullRender := t.fullRender(newLines, height, row, col, width)
@@ -431,8 +432,7 @@ func (t *TUI) doRender() {
 		buffer.WriteString("\x1b[2K") // Clear current line
 
 		line := newLines[i]
-		isImageLine := t.containsImage(line)
-		if !isImageLine && VisibleWidth(line) > width {
+		if !containsImage(line) && VisibleWidth(line) > width {
 			// Log all lines to crash file for debugging
 			crashLogPath := t.getCrashLogPath()
 			var crashData strings.Builder
@@ -531,6 +531,147 @@ func (t *TUI) doRender() {
 	t.positionHardwareCursor(row, col, len(newLines))
 	t.previousLines = newLines
 	t.previousWidth = width
+}
+
+func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
+	entryIndex := len(t.overlayStacks)
+	entry := Overlay{
+		component: component,
+		options:   options,
+		preFocus:  t.focusedComponent,
+		hidden:    false,
+	}
+	t.overlayStacks = append(t.overlayStacks, entry)
+
+	if t.isOverlayVisible(&t.overlayStacks[entryIndex]) {
+		t.SetFocus(component)
+	}
+	t.terminal.HideCursor()
+	t.RequestRender(false)
+
+	hide := func() {
+		index := -1
+		for i := range t.overlayStacks {
+			if t.overlayStacks[i].component == component {
+				index = i
+				break
+			}
+		}
+		if index != -1 {
+			preFocus := t.overlayStacks[index].preFocus
+			t.overlayStacks = append(t.overlayStacks[:index], t.overlayStacks[index+1:]...)
+			if t.focusedComponent == component {
+				topVisible := t.getTopmostVisibleOverlay()
+				if topVisible != nil {
+					t.SetFocus(topVisible.component)
+				} else {
+					t.SetFocus(preFocus)
+				}
+			}
+			if len(t.overlayStacks) == 0 {
+				t.terminal.HideCursor()
+			}
+			t.RequestRender(false)
+		}
+	}
+
+	setHidden := func(hidden bool) {
+		// Find the entry in the slice
+		index := -1
+		for i := range t.overlayStacks {
+			if t.overlayStacks[i].component == component {
+				index = i
+				break
+			}
+		}
+		if index == -1 {
+			return
+		}
+
+		if t.overlayStacks[index].hidden == hidden {
+			return
+		}
+		t.overlayStacks[index].hidden = hidden
+		if hidden {
+			if t.focusedComponent == component {
+				topVisible := t.getTopmostVisibleOverlay()
+				if topVisible != nil {
+					t.SetFocus(topVisible.component)
+				} else {
+					t.SetFocus(t.overlayStacks[index].preFocus)
+				}
+			}
+		} else {
+			if t.isOverlayVisible(&t.overlayStacks[index]) {
+				t.SetFocus(component)
+			}
+		}
+		t.RequestRender(false)
+	}
+
+	isHidden := func() bool {
+		for i := range t.overlayStacks {
+			if t.overlayStacks[i].component == component {
+				return t.overlayStacks[i].hidden
+			}
+		}
+		return true
+	}
+
+	return hide, setHidden, isHidden
+}
+
+func (t *TUI) HideOverlay() {
+	if len(t.overlayStacks) == 0 {
+		return
+	}
+	overlay := t.overlayStacks[len(t.overlayStacks)-1]
+	t.overlayStacks = t.overlayStacks[:len(t.overlayStacks)-1]
+
+	// Find topmost visible overlay, or fall back to preFocus
+	topVisible := t.getTopmostVisibleOverlay()
+	if topVisible != nil {
+		t.SetFocus(topVisible.component)
+	} else {
+		t.SetFocus(overlay.preFocus)
+	}
+
+	if len(t.overlayStacks) == 0 {
+		t.terminal.HideCursor()
+	}
+	t.RequestRender(false)
+}
+
+func (t *TUI) HasOverlay() bool {
+	for _, entry := range t.overlayStacks {
+		if t.isOverlayVisible(&entry) {
+			return true
+		}
+	}
+	return false
+}
+
+// isOverlayVisible check if an overlay entry is currently visible.
+func (t *TUI) isOverlayVisible(entry *Overlay) bool {
+	if entry.hidden {
+		return false
+	}
+	if entry.options.Visible != nil {
+		width, height := t.terminal.GetSize()
+		return entry.options.Visible(width, height)
+	}
+	return true
+}
+
+// GetTopmostVisibleOverlay returns the topmost visible overlay, or nil if none.
+func (t *TUI) getTopmostVisibleOverlay() *Overlay {
+	for i := len(t.overlayStacks) - 1; i >= 0; i-- {
+		entry := t.overlayStacks[i]
+		if t.isOverlayVisible(&entry) {
+			return &entry
+		}
+	}
+	return nil
 }
 
 func (t *TUI) findChangedLineRange(newLines []string) (int, int) {
@@ -723,7 +864,7 @@ func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
 }
 
 func (t *TUI) compositeLineAt(baseLine string, overlayLine string, col int, overlayWidth int, termWidth int) string {
-	if t.containsImage(baseLine) {
+	if containsImage(baseLine) {
 		return baseLine
 	}
 
@@ -768,10 +909,6 @@ var CURSOR_MARKER = "\x1b_pi:c\x07"
 
 var SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
 
-func (t *TUI) containsImage(line string) bool {
-	return strings.Contains(line, "\x1b_G") || strings.Contains(line, "\x1b]1337;File=")
-}
-
 func (t *TUI) getCrashLogPath() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -784,16 +921,4 @@ func (t *TUI) writeCrashLog(path string, data string) {
 	dir := filepath.Dir(path)
 	os.MkdirAll(dir, 0755)
 	os.WriteFile(path, []byte(data), 0644)
-}
-
-func (t *TUI) applyLineRests(lines []string) []string {
-	result := make([]string, len(lines))
-	for i, line := range lines {
-		if t.containsImage(line) {
-			result[i] = line
-		} else {
-			result[i] = line + SEGMENT_RESET
-		}
-	}
-	return result
 }

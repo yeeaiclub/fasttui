@@ -7,149 +7,6 @@ import (
 	"strings"
 )
 
-
-
-func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
-	entryIndex := len(t.overlayStacks)
-	entry := Overlay{
-		component: component,
-		options:   options,
-		preFocus:  t.focusedComponent,
-		hidden:    false,
-	}
-	t.overlayStacks = append(t.overlayStacks, entry)
-
-	if t.isOverlayVisible(&t.overlayStacks[entryIndex]) {
-		t.SetFocus(component)
-	}
-	t.terminal.HideCursor()
-	t.RequestRender(false)
-
-	hide := func() {
-		index := -1
-		for i := range t.overlayStacks {
-			if t.overlayStacks[i].component == component {
-				index = i
-				break
-			}
-		}
-		if index != -1 {
-			preFocus := t.overlayStacks[index].preFocus
-			t.overlayStacks = append(t.overlayStacks[:index], t.overlayStacks[index+1:]...)
-			if t.focusedComponent == component {
-				topVisible := t.getTopmostVisibleOverlay()
-				if topVisible != nil {
-					t.SetFocus(topVisible.component)
-				} else {
-					t.SetFocus(preFocus)
-				}
-			}
-			if len(t.overlayStacks) == 0 {
-				t.terminal.HideCursor()
-			}
-			t.RequestRender(false)
-		}
-	}
-
-	setHidden := func(hidden bool) {
-		// Find the entry in the slice
-		index := -1
-		for i := range t.overlayStacks {
-			if t.overlayStacks[i].component == component {
-				index = i
-				break
-			}
-		}
-		if index == -1 {
-			return
-		}
-
-		if t.overlayStacks[index].hidden == hidden {
-			return
-		}
-		t.overlayStacks[index].hidden = hidden
-		if hidden {
-			if t.focusedComponent == component {
-				topVisible := t.getTopmostVisibleOverlay()
-				if topVisible != nil {
-					t.SetFocus(topVisible.component)
-				} else {
-					t.SetFocus(t.overlayStacks[index].preFocus)
-				}
-			}
-		} else {
-			if t.isOverlayVisible(&t.overlayStacks[index]) {
-				t.SetFocus(component)
-			}
-		}
-		t.RequestRender(false)
-	}
-
-	isHidden := func() bool {
-		for i := range t.overlayStacks {
-			if t.overlayStacks[i].component == component {
-				return t.overlayStacks[i].hidden
-			}
-		}
-		return true
-	}
-
-	return hide, setHidden, isHidden
-}
-
-func (t *TUI) HideOverlay() {
-	if len(t.overlayStacks) == 0 {
-		return
-	}
-	overlay := t.overlayStacks[len(t.overlayStacks)-1]
-	t.overlayStacks = t.overlayStacks[:len(t.overlayStacks)-1]
-
-	// Find topmost visible overlay, or fall back to preFocus
-	topVisible := t.getTopmostVisibleOverlay()
-	if topVisible != nil {
-		t.SetFocus(topVisible.component)
-	} else {
-		t.SetFocus(overlay.preFocus)
-	}
-
-	if len(t.overlayStacks) == 0 {
-		t.terminal.HideCursor()
-	}
-	t.RequestRender(false)
-}
-
-func (t *TUI) HasOverlay() bool {
-	for _, entry := range t.overlayStacks {
-		if t.isOverlayVisible(&entry) {
-			return true
-		}
-	}
-	return false
-}
-
-// isOverlayVisible check if an overlay entry is currently visible.
-func (t *TUI) isOverlayVisible(entry *Overlay) bool {
-	if entry.hidden {
-		return false
-	}
-	if entry.options.Visible != nil {
-		width, height := t.terminal.GetSize()
-		return entry.options.Visible(width, height)
-	}
-	return true
-}
-
-// GetTopmostVisibleOverlay returns the topmost visible overlay, or nil if none.
-func (t *TUI) getTopmostVisibleOverlay() *Overlay {
-	for i := len(t.overlayStacks) - 1; i >= 0; i-- {
-		entry := t.overlayStacks[i]
-		if t.isOverlayVisible(&entry) {
-			return &entry
-		}
-	}
-	return nil
-}
-
 func (t *TUI) SetShowHardwareCursor(enabled bool) {
 	if t.showHardwareCursor == enabled {
 		return
@@ -242,7 +99,10 @@ func (t *TUI) positionHardwareCursor(row int, col int, totalLines int) {
 	}
 }
 
-func (t *TUI) parseSizeValue(value any, total int) int {
+// parseSizeValue parses a size value which can be either an absolute pixel value (int)
+// or a percentage string (e.g., "50%"). When a percentage is provided, it calculates
+// the size based on the total available space. Returns 0 for invalid or negative values.
+func parseSizeValue(value any, total int) int {
 	if value == nil {
 		return 0
 	}
@@ -270,7 +130,11 @@ func (t *TUI) parseSizeValue(value any, total int) int {
 	return 0
 }
 
-func (t *TUI) parseMargin(margin any) (marginTop, marginRight, marginBottom, marginLeft int) {
+// parseMargin parses margin values which can be either:
+// - An int: applies the same margin to all sides
+// - A map[string]int: specifies individual margins for top, right, bottom, left
+// Returns 0 for any negative margin values or unsupported types.
+func parseMargin(margin any) (marginTop, marginRight, marginBottom, marginLeft int) {
 	if margin == nil {
 		return 0, 0, 0, 0
 	}
@@ -285,7 +149,11 @@ func (t *TUI) parseMargin(margin any) (marginTop, marginRight, marginBottom, mar
 	}
 }
 
-func (t *TUI) extractCursorPosition(lines []string, height int) (int, int) {
+// extractCursorPosition searches for a cursor marker in the given lines and returns
+// its row and column position. The cursor marker is removed from the line after extraction.
+// Returns (-1, -1) if no cursor marker is found. The search starts from the bottom
+// of the visible viewport and goes upward.
+func extractCursorPosition(lines []string, height int) (int, int) {
 	viewportTop := max(0, len(lines)-height)
 	for row := len(lines) - 1; row >= viewportTop; row-- {
 		line := lines[row]
@@ -298,4 +166,26 @@ func (t *TUI) extractCursorPosition(lines []string, height int) (int, int) {
 		}
 	}
 	return -1, -1 // Return -1, -1 to indicate no cursor found
+}
+
+// containsImage checks if a line contains image data using either:
+// - Kitty graphics protocol (\x1b_G)
+// - iTerm2 inline image protocol (\x1b]1337;File=)
+func containsImage(line string) bool {
+	return strings.Contains(line, "\x1b_G") || strings.Contains(line, "\x1b]1337;File=")
+}
+
+// applyLineRests applies segment reset codes to each line. Lines containing images
+// are left unchanged, while other lines get a reset code appended to ensure proper
+// terminal rendering.
+func applyLineRests(lines []string) []string {
+	result := make([]string, len(lines))
+	for i, line := range lines {
+		if containsImage(line) {
+			result[i] = line
+		} else {
+			result[i] = line + SEGMENT_RESET
+		}
+	}
+	return result
 }
