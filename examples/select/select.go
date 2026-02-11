@@ -2,11 +2,10 @@ package main
 
 import (
 	"fmt"
-	"os"
-
 	"github.com/yeeaiclub/fasttui"
 	"github.com/yeeaiclub/fasttui/components"
 	"github.com/yeeaiclub/fasttui/terminal"
+	"os"
 )
 
 func main() {

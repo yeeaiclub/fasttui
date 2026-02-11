@@ -270,34 +270,7 @@ func (t *TUI) doRender() {
 	newLines = t.applyLineRests(newLines)
 	widthChanged := t.previousWidth != 0 && t.previousWidth != width
 
-	fullRender := func(clear bool) {
-		t.fullRedrawCount++
-		var buffer strings.Builder
-		buffer.WriteString("\x1b[?2026h") // Begin synchronized output
-		if clear {
-			buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
-		}
-		for i := 0; i < len(newLines); i++ {
-			if i > 0 {
-				buffer.WriteString("\r\n")
-			}
-			buffer.WriteString(newLines[i])
-		}
-		buffer.WriteString("\x1b[?2026l") // End synchronized output
-		t.terminal.Write(buffer.String())
-		t.cursorRow = max(0, len(newLines)-1)
-		t.hardwareCursorRow = t.cursorRow
-		// Reset max lines when clearing, otherwise track growth
-		if clear {
-			t.maxLinesRendered = len(newLines)
-		} else {
-			t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
-		}
-		t.previousViewportTop = max(0, t.maxLinesRendered-height)
-		t.positionHardwareCursor(row, col, len(newLines))
-		t.previousLines = newLines
-		t.previousWidth = width
-	}
+	fullRender := t.fullRender(newLines, height, row, col, width)
 
 	if len(t.previousLines) == 0 && !widthChanged {
 		fullRender(false)
@@ -566,6 +539,38 @@ func (t *TUI) doRender() {
 	t.positionHardwareCursor(row, col, len(newLines))
 	t.previousLines = newLines
 	t.previousWidth = width
+}
+
+func (t *TUI) fullRender(newLines []string, height int, row int, col int, width int) func(clear bool) {
+	fullRender := func(clear bool) {
+		t.fullRedrawCount++
+		var buffer strings.Builder
+		buffer.WriteString("\x1b[?2026h") // Begin synchronized output
+		if clear {
+			buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
+		}
+		for i := 0; i < len(newLines); i++ {
+			if i > 0 {
+				buffer.WriteString("\r\n")
+			}
+			buffer.WriteString(newLines[i])
+		}
+		buffer.WriteString("\x1b[?2026l") // End synchronized output
+		t.terminal.Write(buffer.String())
+		t.cursorRow = max(0, len(newLines)-1)
+		t.hardwareCursorRow = t.cursorRow
+		// Reset max lines when clearing, otherwise track growth
+		if clear {
+			t.maxLinesRendered = len(newLines)
+		} else {
+			t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
+		}
+		t.previousViewportTop = max(0, t.maxLinesRendered-height)
+		t.positionHardwareCursor(row, col, len(newLines))
+		t.previousLines = newLines
+		t.previousWidth = width
+	}
+	return fullRender
 }
 
 func (t *TUI) writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
