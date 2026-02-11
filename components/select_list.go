@@ -72,8 +72,12 @@ func (s *SelectList) Render(width int) []string {
 	}
 
 	if startIndex > 0 || endIndex < len(s.filteredItems) {
-		rateText := fmt.Sprintf(" (%d/%d)", startIndex, len(s.filteredItems))
-		lines = append(lines, fasttui.TruncateToWidth(rateText, width-2, "", false))
+		rateText := fmt.Sprintf(" (%d/%d)", s.selectedIndex+1, len(s.filteredItems))
+		if s.theme.ScrollInfo != nil {
+			lines = append(lines, s.theme.ScrollInfo(rateText))
+		} else {
+			lines = append(lines, rateText)
+		}
 	}
 	return lines
 }
@@ -207,4 +211,31 @@ func (s *SelectList) getSelectItem() SelectItem {
 func normalizeToSingleLine(text string) string {
 	replacer := strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ")
 	return strings.TrimSpace(replacer.Replace(text))
+}
+
+func (s *SelectList) SetOnSelect(onSelect func(item SelectItem)) {
+	s.onSelect = onSelect
+}
+
+func (s *SelectList) SetOnCancel(onCancel func()) {
+	s.onCancel = onCancel
+}
+
+func (s *SelectList) SetOnSelectionChange(onSelectionChange func(item SelectItem)) {
+	s.onSelectionChange = onSelectionChange
+}
+
+func (s *SelectList) SetFocused(focused bool) {
+	// SelectList doesn't need focus state currently
+}
+
+func (s *SelectList) IsFocused() bool {
+	return true
+}
+
+func (s *SelectList) WantsKeyRelease() bool {
+	return false
+}
+
+func (s *SelectList) Invalidate() {
 }
