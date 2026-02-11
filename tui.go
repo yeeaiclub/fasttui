@@ -313,7 +313,7 @@ func (t *TUI) doRender() {
 	firstChanged := -1
 	lastChanged := -1
 	maxLines := max(len(newLines), len(t.previousLines))
-	for i := 0; i < maxLines; i++ {
+	for i := range maxLines {
 		oldLine := ""
 		newLine := ""
 		if i < len(t.previousLines) {
@@ -378,7 +378,7 @@ func (t *TUI) doRender() {
 			if extraLines > 0 {
 				buffer.WriteString("\x1b[1B")
 			}
-			for i := 0; i < extraLines; i++ {
+			for i := range extraLines {
 				buffer.WriteString("\r\x1b[2K")
 				if i < extraLines-1 {
 					buffer.WriteString("\x1b[1B")
