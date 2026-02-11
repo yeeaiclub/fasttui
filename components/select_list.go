@@ -1,14 +1,25 @@
 package components
 
+import (
+	"fmt"
+	"strings"
+
+	"github.com/yeeaiclub/fasttui"
+	"github.com/yeeaiclub/fasttui/keys"
+)
+
 type SelectItem struct {
-	Label string
-	Value string
+	Label       string
+	Value       string
+	Description string
 }
 
 type SelectListTheme struct {
 	SelectedPrefix string
 	NormalPrefix   string
 	NoMatch        func(string) string
+	ScrollInfo     func(string) string
+	Description    func(string) string
 }
 
 type SelectList struct {
@@ -21,6 +32,14 @@ type SelectList struct {
 	onSelect          func(item SelectItem)
 	onCancel          func()
 	onSelectionChange func(item SelectItem)
+}
+
+func NewSelectList(items []SelectItem, maxVisible int, theme SelectListTheme) *SelectList {
+	return &SelectList{
+		items:      items,
+		maxVisible: maxVisible,
+		theme:      theme,
+	}
 }
 
 func (s *SelectList) Render(width int) []string {
@@ -40,12 +59,128 @@ func (s *SelectList) Render(width int) []string {
 
 	for i := startIndex; i < endIndex; i++ {
 		item := s.filteredItems[i]
-		if i == s.selectedIndex {
-			lines = append(lines, s.theme.SelectedPrefix+item.Label)
+		isSelected := i == s.selectedIndex
+		line := ""
+		if isSelected {
+			line = s.handleSelect(item, width)
 		} else {
-			lines = append(lines, s.theme.NormalPrefix+item.Label)
+			line = s.handleNoSelect(item, width)
+		}
+		lines = append(lines, line)
+	}
+
+	if startIndex > 0 || endIndex < len(s.filteredItems) {
+		rateText := fmt.Sprintf(" (%d/%d)", startIndex, len(s.filteredItems))
+		lines = append(lines, fasttui.TruncateToWidth(rateText, width-2, "", false))
+	}
+	return lines
+}
+
+func (s *SelectList) handleSelect(item SelectItem, width int) string {
+	prefix := "→ "
+	prefixLen := len(prefix)
+	dispaly := item.Value
+	if item.Label == "" {
+		dispaly = item.Label
+	}
+
+	if width < 40 {
+		maxWidth := width - prefixLen - 2
+		return fmt.Sprintf("%s %s", prefix, fasttui.TruncateToWidth(dispaly, maxWidth, "", false))
+	}
+
+	maxValueWidth := min(30, width-prefixLen-4)
+	truncatedValue := fasttui.TruncateToWidth(dispaly, maxValueWidth, "", false)
+	spacing := strings.Repeat(" ", max(1, 32-len(truncatedValue)))
+	start := prefixLen + len(truncatedValue) + len(spacing)
+	remingWidth := width - start - 2
+	if remingWidth > 10 {
+		desc := fasttui.TruncateToWidth(dispaly, remingWidth, "", false)
+		descText := s.theme.Description(spacing + desc)
+		return prefix + truncatedValue + descText
+	}
+	maxWidth := width - len(prefix) - 2
+	return prefix + fasttui.TruncateToWidth(dispaly, maxWidth, "", false)
+}
+
+func (s *SelectList) handleNoSelect(item SelectItem, width int) string {
+	prefix := "  "
+	prefixLen := len(prefix)
+	dispaly := item.Value
+	if item.Label == "" {
+		dispaly = item.Label
+	}
+
+	if width < 40 {
+		maxWidth := width - len(prefix) - 2
+		line := prefix + fasttui.TruncateToWidth(dispaly, maxWidth, "", false)
+		return line
+	}
+
+	maxValueWidth := min(30, width-prefixLen-4)
+	truncatedValue := fasttui.TruncateToWidth(dispaly, maxValueWidth, "", false)
+	spacing := strings.Repeat(" ", max(1, 32-len(truncatedValue)))
+
+	start := prefixLen + len(truncatedValue) + len(spacing)
+	remmingWidth := width - start - 2
+
+	if remmingWidth > 10 {
+		desc := fasttui.TruncateToWidth(dispaly, remmingWidth, "", false)
+		descText := s.theme.Description(spacing + desc)
+		return prefix + truncatedValue + descText
+	}
+
+	maxWidth := width - len(prefix) - 2
+	return prefix + fasttui.TruncateToWidth(dispaly, maxWidth, "", false)
+}
+
+func (s *SelectList) HandleInput(keyData string) {
+	kb := keys.GetEditorKeybindings()
+	if kb.Matches(keyData, keys.EditorActionSelectUp) {
+		if s.selectedIndex == 0 {
+			s.selectedIndex = len(s.filteredItems) - 1
+		} else {
+			s.selectedIndex--
+		}
+		s.notifySelectionChange()
+	}
+
+	if kb.Matches(keyData, keys.EditorActionSelectDown) {
+		if s.selectedIndex == len(s.filteredItems)-1 {
+			s.selectedIndex = 0
+		} else {
+			s.selectedIndex++
+		}
+		s.notifySelectionChange()
+	}
+
+	if kb.Matches(keyData, keys.EditorActionSelectConfirm) {
+		item := s.getSelectItem()
+		if s.onSelect != nil {
+			s.onSelect(item)
 		}
 	}
 
-	return lines
+	if kb.Matches(keyData, keys.EditorActionSelectCancel) {
+		if s.onCancel != nil {
+			s.onCancel()
+		}
+	}
+}
+
+func (s *SelectList) notifySelectionChange() {
+	selectItem := s.filteredItems[s.selectedIndex]
+	if s.onSelectionChange != nil {
+		s.onSelectionChange(selectItem)
+	}
+}
+
+func (s *SelectList) getSelectItem() SelectItem {
+	item := s.filteredItems[s.selectedIndex]
+	return item
+}
+
+func normalizeToSingleLine(text string) string {
+	replacer := strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ")
+	return strings.TrimSpace(replacer.Replace(text))
 }
