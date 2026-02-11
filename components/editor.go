@@ -4,14 +4,11 @@ type Editor struct {
 	history []string
 }
 
-
-type LayoutLine struct{
-	Text string;
-	HasCursor boolean;
-	CursorPos number;
+type LayoutLine struct {
+	Text      string
+	HasCursor bool
+	CursorPos int
 }
-
-
 
 func NewEditor() *Editor {
 	return &Editor{
@@ -38,5 +35,4 @@ func (e *Editor) HandleInput(data string) {
 }
 
 func (e *Editor) LayoutText(width int) {
-	var layoutLines
 }
