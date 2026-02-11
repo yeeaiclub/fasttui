@@ -49,16 +49,22 @@ func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 	return t
 }
 
-func (t *TUI) start() error {
-	t.stopped = false
-	return t.terminal.Start(
-		func(data string) {
-			t.HandleInput(data)
-		},
-		func() {
-			t.RequestRender(false)
-		},
-	)
+func (t *TUI) Start() {
+	t.start()
+	go t.renderLoop()
+	t.doRender()
+}
+
+func (t *TUI) Stop() {
+	t.stopped = true
+	t.terminal.Stop()
+}
+
+func (t *TUI) renderLoop() {
+	for range t.renderChan {
+		t.renderRequested = false
+		t.doRender()
+	}
 }
 
 func (t *TUI) RequestRender(force bool) {
@@ -78,182 +84,6 @@ func (t *TUI) RequestRender(force bool) {
 	case t.renderChan <- struct{}{}:
 	default:
 	}
-}
-
-func (t *TUI) SetFocus(component Component) {
-	if t.focusedComponent != nil {
-		if f, ok := t.focusedComponent.(Focusable); ok {
-			f.SetFocused(false)
-		}
-	}
-
-	t.focusedComponent = component
-
-	if component != nil {
-		if f, ok := t.focusedComponent.(Focusable); ok {
-			f.SetFocused(true)
-		}
-	}
-}
-
-func (t *TUI) HandleInput(data string) {
-	if t.cellSizeQueryPending {
-		t.inputBuffer.WriteString(data)
-		filtered := t.parseCellSizeResponse()
-		if filtered == "" {
-			return
-		}
-		data = filtered
-	}
-
-	var focusedOverlay *Overlay
-	for i := range t.overlayStacks {
-		if t.overlayStacks[i].component == t.focusedComponent {
-			focusedOverlay = &t.overlayStacks[i]
-			break
-		}
-	}
-	if focusedOverlay != nil && !t.isOverlayVisible(focusedOverlay) {
-		topVisible := t.getTopmostVisibleOverlay()
-		if topVisible != nil {
-			t.SetFocus(topVisible.component)
-		} else {
-			t.SetFocus(focusedOverlay.preFocus)
-		}
-	}
-
-	if t.focusedComponent != nil {
-		if keys.IsKeyRelease(data) && !t.focusedComponent.WantsKeyRelease() {
-			return
-		}
-		t.focusedComponent.HandleInput(data)
-		t.RequestRender(false)
-	}
-}
-
-func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, termWidth int, termHeight int) OverlayLayout {
-	marginTop, marginRight, marginBottom, marginLeft := parseMargin(options.Margin)
-
-	availWidth := max(1, termWidth-marginLeft-marginRight)
-	availHeight := max(1, termHeight-marginTop-marginBottom)
-
-	width := parseSizeValue(options.Width, termWidth)
-	if width == 0 {
-		width = min(80, availWidth)
-	}
-	if options.MiniWidth > 0 {
-		width = max(width, options.MiniWidth)
-	}
-	width = max(1, min(width, availWidth))
-
-	var maxHeight *int
-	if options.MaxHeight > 0 {
-		maxHeightVal := parseSizeValue(options.MaxHeight, termHeight)
-		if maxHeightVal > 0 {
-			maxHeightVal = max(1, min(maxHeightVal, availHeight))
-			maxHeight = &maxHeightVal
-		}
-	}
-
-	effectiveHeight := overlayHeight
-	if maxHeight != nil {
-		effectiveHeight = min(overlayHeight, *maxHeight)
-	}
-
-	var row, col int
-
-	if options.Row != 0 {
-		row = options.Row
-	} else {
-		anchor := options.Anchor
-		if anchor == "" {
-			anchor = AnchorCenter
-		}
-		row = t.resolveAnchorRow(anchor, effectiveHeight, availHeight, marginTop)
-	}
-
-	if options.Col != 0 {
-		col = options.Col
-	} else {
-		anchor := options.Anchor
-		if anchor == "" {
-			anchor = AnchorCenter
-		}
-		col = t.resolveAnchorCol(anchor, width, availWidth, marginLeft)
-	}
-
-	if options.OffsetY != 0 {
-		row += options.OffsetY
-	}
-	if options.OffsetX != 0 {
-		col += options.OffsetX
-	}
-
-	row = max(marginTop, min(row, termHeight-marginBottom-effectiveHeight))
-	col = max(marginLeft, min(col, termWidth-marginRight-width))
-
-	return OverlayLayout{
-		width:     width,
-		row:       row,
-		col:       col,
-		maxHeight: maxHeight,
-	}
-}
-
-func (t *TUI) renderLoop() {
-	for range t.renderChan {
-		t.renderRequested = false
-		t.doRender()
-	}
-}
-
-func (t *TUI) Start() {
-	t.start()
-	go t.renderLoop()
-	t.doRender()
-}
-
-func (t *TUI) Stop() {
-	t.stopped = true
-	t.terminal.Stop()
-}
-
-func (t *TUI) parseCellSizeResponse() string {
-	data := t.inputBuffer.String()
-
-	responsePattern := `\x1b\[6;(\d+);(\d+)t`
-	re := regexp.MustCompile(responsePattern)
-	matches := re.FindStringSubmatch(data)
-
-	if len(matches) == 3 {
-		heightPx, err1 := strconv.Atoi(matches[1])
-		widthPx, err2 := strconv.Atoi(matches[2])
-
-		if err1 == nil && err2 == nil && heightPx > 0 && widthPx > 0 {
-			t.Invalidate()
-			t.RequestRender(false)
-
-			t.inputBuffer.Reset()
-			t.cellSizeQueryPending = false
-			return ""
-		}
-	}
-
-	partialPattern := `\x1b(\[6?;?[\d;]*)?$`
-	rePartial := regexp.MustCompile(partialPattern)
-	if rePartial.MatchString(data) {
-		if len(data) > 0 {
-			lastChar := data[len(data)-1]
-			if !((lastChar >= 'a' && lastChar <= 'z') || (lastChar >= 'A' && lastChar <= 'Z') || lastChar == '~') {
-				return ""
-			}
-		}
-	}
-
-	result := t.inputBuffer.String()
-	t.inputBuffer.Reset()
-	t.cellSizeQueryPending = false
-	return result
 }
 
 func (t *TUI) doRender() {
@@ -533,6 +363,208 @@ func (t *TUI) doRender() {
 	t.previousWidth = width
 }
 
+func (t *TUI) fullRender(newLines []string, height int, row int, col int, width int) func(clear bool) {
+	fullRender := func(clear bool) {
+		t.fullRedrawCount++
+		var buffer strings.Builder
+		buffer.WriteString("\x1b[?2026h") // Begin synchronized output
+		if clear {
+			buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
+		}
+		for i := 0; i < len(newLines); i++ {
+			if i > 0 {
+				buffer.WriteString("\r\n")
+			}
+			buffer.WriteString(newLines[i])
+		}
+		buffer.WriteString("\x1b[?2026l") // End synchronized output
+		t.terminal.Write(buffer.String())
+		t.cursorRow = max(0, len(newLines)-1)
+		t.hardwareCursorRow = t.cursorRow
+		// Reset max lines when clearing, otherwise track growth
+		if clear {
+			t.maxLinesRendered = len(newLines)
+		} else {
+			t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
+		}
+		t.previousViewportTop = max(0, t.maxLinesRendered-height)
+		t.positionHardwareCursor(row, col, len(newLines))
+		t.previousLines = newLines
+		t.previousWidth = width
+	}
+	return fullRender
+}
+
+func (t *TUI) start() error {
+	t.stopped = false
+	return t.terminal.Start(
+		func(data string) {
+			t.HandleInput(data)
+		},
+		func() {
+			t.RequestRender(false)
+		},
+	)
+}
+
+func (t *TUI) SetFocus(component Component) {
+	if t.focusedComponent != nil {
+		if f, ok := t.focusedComponent.(Focusable); ok {
+			f.SetFocused(false)
+		}
+	}
+
+	t.focusedComponent = component
+
+	if component != nil {
+		if f, ok := t.focusedComponent.(Focusable); ok {
+			f.SetFocused(true)
+		}
+	}
+}
+
+func (t *TUI) HandleInput(data string) {
+	if t.cellSizeQueryPending {
+		t.inputBuffer.WriteString(data)
+		filtered := t.parseCellSizeResponse()
+		if filtered == "" {
+			return
+		}
+		data = filtered
+	}
+
+	var focusedOverlay *Overlay
+	for i := range t.overlayStacks {
+		if t.overlayStacks[i].component == t.focusedComponent {
+			focusedOverlay = &t.overlayStacks[i]
+			break
+		}
+	}
+	if focusedOverlay != nil && !t.isOverlayVisible(focusedOverlay) {
+		topVisible := t.getTopmostVisibleOverlay()
+		if topVisible != nil {
+			t.SetFocus(topVisible.component)
+		} else {
+			t.SetFocus(focusedOverlay.preFocus)
+		}
+	}
+
+	if t.focusedComponent != nil {
+		if keys.IsKeyRelease(data) && !t.focusedComponent.WantsKeyRelease() {
+			return
+		}
+		t.focusedComponent.HandleInput(data)
+		t.RequestRender(false)
+	}
+}
+
+func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, termWidth int, termHeight int) OverlayLayout {
+	marginTop, marginRight, marginBottom, marginLeft := parseMargin(options.Margin)
+
+	availWidth := max(1, termWidth-marginLeft-marginRight)
+	availHeight := max(1, termHeight-marginTop-marginBottom)
+
+	width := parseSizeValue(options.Width, termWidth)
+	if width == 0 {
+		width = min(80, availWidth)
+	}
+	if options.MiniWidth > 0 {
+		width = max(width, options.MiniWidth)
+	}
+	width = max(1, min(width, availWidth))
+
+	var maxHeight *int
+	if options.MaxHeight > 0 {
+		maxHeightVal := parseSizeValue(options.MaxHeight, termHeight)
+		if maxHeightVal > 0 {
+			maxHeightVal = max(1, min(maxHeightVal, availHeight))
+			maxHeight = &maxHeightVal
+		}
+	}
+
+	effectiveHeight := overlayHeight
+	if maxHeight != nil {
+		effectiveHeight = min(overlayHeight, *maxHeight)
+	}
+
+	var row, col int
+
+	if options.Row != 0 {
+		row = options.Row
+	} else {
+		anchor := options.Anchor
+		if anchor == "" {
+			anchor = AnchorCenter
+		}
+		row = t.resolveAnchorRow(anchor, effectiveHeight, availHeight, marginTop)
+	}
+
+	if options.Col != 0 {
+		col = options.Col
+	} else {
+		anchor := options.Anchor
+		if anchor == "" {
+			anchor = AnchorCenter
+		}
+		col = t.resolveAnchorCol(anchor, width, availWidth, marginLeft)
+	}
+
+	if options.OffsetY != 0 {
+		row += options.OffsetY
+	}
+	if options.OffsetX != 0 {
+		col += options.OffsetX
+	}
+
+	row = max(marginTop, min(row, termHeight-marginBottom-effectiveHeight))
+	col = max(marginLeft, min(col, termWidth-marginRight-width))
+
+	return OverlayLayout{
+		width:     width,
+		row:       row,
+		col:       col,
+		maxHeight: maxHeight,
+	}
+}
+
+func (t *TUI) parseCellSizeResponse() string {
+	data := t.inputBuffer.String()
+
+	responsePattern := `\x1b\[6;(\d+);(\d+)t`
+	re := regexp.MustCompile(responsePattern)
+	matches := re.FindStringSubmatch(data)
+
+	if len(matches) == 3 {
+		heightPx, err1 := strconv.Atoi(matches[1])
+		widthPx, err2 := strconv.Atoi(matches[2])
+
+		if err1 == nil && err2 == nil && heightPx > 0 && widthPx > 0 {
+			t.Invalidate()
+			t.RequestRender(false)
+
+			t.inputBuffer.Reset()
+			t.cellSizeQueryPending = false
+			return ""
+		}
+	}
+
+	partialPattern := `\x1b(\[6?;?[\d;]*)?$`
+	rePartial := regexp.MustCompile(partialPattern)
+	if rePartial.MatchString(data) {
+		if len(data) > 0 {
+			lastChar := data[len(data)-1]
+			if !((lastChar >= 'a' && lastChar <= 'z') || (lastChar >= 'A' && lastChar <= 'Z') || lastChar == '~') {
+				return ""
+			}
+		}
+	}
+
+	result := t.inputBuffer.String()
+	t.inputBuffer.Reset()
+	t.cellSizeQueryPending = false
+	return result
+}
+
 func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
 	entryIndex := len(t.overlayStacks)
 	entry := Overlay{
@@ -696,38 +728,6 @@ func (t *TUI) findChangedLineRange(newLines []string) (int, int) {
 		}
 	}
 	return firstChanged, lastChanged
-}
-
-func (t *TUI) fullRender(newLines []string, height int, row int, col int, width int) func(clear bool) {
-	fullRender := func(clear bool) {
-		t.fullRedrawCount++
-		var buffer strings.Builder
-		buffer.WriteString("\x1b[?2026h") // Begin synchronized output
-		if clear {
-			buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
-		}
-		for i := 0; i < len(newLines); i++ {
-			if i > 0 {
-				buffer.WriteString("\r\n")
-			}
-			buffer.WriteString(newLines[i])
-		}
-		buffer.WriteString("\x1b[?2026l") // End synchronized output
-		t.terminal.Write(buffer.String())
-		t.cursorRow = max(0, len(newLines)-1)
-		t.hardwareCursorRow = t.cursorRow
-		// Reset max lines when clearing, otherwise track growth
-		if clear {
-			t.maxLinesRendered = len(newLines)
-		} else {
-			t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
-		}
-		t.previousViewportTop = max(0, t.maxLinesRendered-height)
-		t.positionHardwareCursor(row, col, len(newLines))
-		t.previousLines = newLines
-		t.previousWidth = width
-	}
-	return fullRender
 }
 
 func (t *TUI) writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
