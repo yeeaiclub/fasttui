@@ -6,6 +6,6 @@ type Markdown struct {
 	paddingY int
 }
 
-func NewMarkdonw() *Markdown {
+func NewMarkdown() *Markdown {
 	return &Markdown{}
 }

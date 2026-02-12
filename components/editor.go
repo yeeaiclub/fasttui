@@ -1,7 +1,8 @@
 package components
 
 import (
-	"strconv"
+	"fmt"
+	"github.com/yeeaiclub/fasttui/keys"
 	"strings"
 	"unicode"
 
@@ -32,7 +33,8 @@ type Editor struct {
 	history []string
 
 	// Kill ring for Emacs-style operations
-	killRing []string
+	killRing    []string
+	borderColor func(string) string
 }
 
 type EditorState struct {
@@ -76,118 +78,14 @@ func (e *Editor) HandleInput(data string) {
 		}
 		return
 	}
-
-	// Handle Enter - submit
-	if data == "\r" || data == "\n" {
-		e.handleSubmit()
+	kb := keys.GetEditorKeybindings()
+	if kb.Matches(data, keys.EditorActionCopy) {
 		return
 	}
 
-	// Handle Shift+Enter - new line
-	if data == "\x1b[13;2~" || data == "\x1b\r" {
-		e.addNewLine()
-		return
-	}
-
-	// Handle Backspace
-	if data == "\x7f" || data == "\b" {
-		e.handleBackspace()
-		return
-	}
-
-	// Handle Delete
-	if data == "\x1b[3~" {
-		e.handleForwardDelete()
-		return
-	}
-
-	// Handle arrow keys
-	if data == "\x1b[A" { // Up
-		e.moveCursor(-1, 0)
-		return
-	}
-	if data == "\x1b[B" { // Down
-		e.moveCursor(1, 0)
-		return
-	}
-	if data == "\x1b[C" { // Right
-		e.moveCursor(0, 1)
-		return
-	}
-	if data == "\x1b[D" { // Left
-		e.moveCursor(0, -1)
-		return
-	}
-
-	// Handle Ctrl+A - move to line start
-	if data == "\x01" {
-		e.moveToLineStart()
-		return
-	}
-
-	// Handle Ctrl+E - move to line end
-	if data == "\x05" {
-		e.moveToLineEnd()
-		return
-	}
-
-	// Handle Ctrl+K - delete to end of line
-	if data == "\x0b" {
-		e.deleteToEndOfLine()
-		return
-	}
-
-	// Handle Ctrl+U - delete to start of line
-	if data == "\x15" {
-		e.deleteToStartOfLine()
-		return
-	}
-
-	// Handle Ctrl+W - delete word backwards
-	if data == "\x17" {
-		e.deleteWordBackwards()
-		return
-	}
-
-	// Handle Alt+D - delete word forward
-	if data == "\x1bd" {
-		e.deleteWordForward()
-		return
-	}
-
-	// Handle Ctrl+Y - yank
-	if data == "\x19" {
-		e.yank()
-		return
-	}
-
-	// Handle Alt+Y - yank pop
-	if data == "\x1by" {
-		e.yankPop()
-		return
-	}
-
-	// Handle Ctrl+Z - undo
-	if data == "\x1a" {
+	if kb.Matches(data, keys.EditorActionUndo) {
 		e.undo()
 		return
-	}
-
-	// Handle Alt+B - move word backwards
-	if data == "\x1bb" {
-		e.moveWordBackwards()
-		return
-	}
-
-	// Handle Alt+F - move word forwards
-	if data == "\x1bf" {
-		e.moveWordForwards()
-		return
-	}
-
-	// Regular printable characters
-	if len(data) > 0 && data[0] >= 32 {
-		e.insertCharacter(data)
 	}
 }
 
@@ -196,20 +94,21 @@ func (e *Editor) Render(width int) []string {
 	paddingX := min(e.paddingX, maxPadding)
 	contentWidth := max(1, width-paddingX*2)
 
-	leftPadding := strings.Repeat(" ", paddingX)
-	rightPadding := leftPadding
-
-	// Layout width: with padding the cursor can overflow into it,
-	// without padding we reserve 1 column for the cursor
-	layoutWidth := max(1, contentWidth)
-	if paddingX == 0 {
-		layoutWidth = max(1, contentWidth-1)
+	layoutWidth := 1
+	if paddingX > 0 {
+		layoutWidth = max(layoutWidth, contentWidth-paddingX)
+	} else {
+		layoutWidth = max(layoutWidth, contentWidth-1)
 	}
 	e.layoutWidth = layoutWidth
 
+	horizontal := e.borderColor("─")
+
+	//layout the text
+	layoutLines := e.layoutText(layoutWidth)
+
 	_, height := e.term.GetSize()
 	maxVisibleLines := max(5, int(float64(height)*0.3))
-	layoutLines := e.layoutText(layoutWidth)
 
 	// Find cursor line index
 	cursorLineIndex := 0
@@ -231,125 +130,32 @@ func (e *Editor) Render(width int) []string {
 
 	// Get visible lines slice
 	endIndex := min(e.scrollOffset+maxVisibleLines, len(layoutLines))
-	visibleLines := layoutLines[e.scrollOffset:endIndex]
+	visibleLines := layoutLines[e.scrollOffset : e.scrollOffset+maxVisibleLines]
 	var result []string
+	leftPadding := strings.Repeat(" ", paddingX)
+	rightPadding := leftPadding
 
-	// Render top border (with scroll indicator if scrolled down)
-	horizontal := "─"
 	if e.scrollOffset > 0 {
-		indicator := "─── ↑ " + strconv.Itoa(e.scrollOffset) + " more "
-		indicatorWidth := fasttui.VisibleWidth(indicator)
-		remaining := width - indicatorWidth
-		borderLine := indicator + strings.Repeat(horizontal, max(0, remaining))
-		// Ensure border doesn't exceed width
-		if fasttui.VisibleWidth(borderLine) > width {
-			borderLine = fasttui.TruncateToWidth(borderLine, width, "", false)
-		}
-		result = append(result, borderLine)
+		result = append(result, e.renderTopBorder(width, e.scrollOffset))
 	} else {
-		result = append(result, strings.Repeat(horizontal, width))
+		result = append(result, strings.Repeat("─", width))
 	}
 
-	// Render visible lines with padding and cursor
 	for _, line := range visibleLines {
 		displayText := line.Text
-
-		// Truncate text if it exceeds layout width
-		if fasttui.VisibleWidth(displayText) > layoutWidth {
-			displayText = fasttui.TruncateToWidth(displayText, layoutWidth, "", false)
-		}
-
-		lineVisibleWidth := fasttui.VisibleWidth(displayText)
-		cursorInPadding := false
-
-		// Add cursor if this line has it
-		if line.HasCursor {
-			before := ""
-			after := ""
-			cursorPos := line.CursorPos
-
-			// Ensure cursor position is within bounds
-			if cursorPos > len(displayText) {
-				cursorPos = len(displayText)
-			}
-
-			if cursorPos <= len(displayText) {
-				before = displayText[:cursorPos]
-				after = displayText[cursorPos:]
-			} else {
-				before = displayText
-			}
-
-			// Note: We don't use CURSOR_MARKER here because we render a visible cursor
-			// using reverse video, and the hardware cursor would create a duplicate
-
-			if len(after) > 0 {
-				// Cursor is on a character - replace it with highlighted version
-				runes := []rune(after)
-				if len(runes) > 0 {
-					firstGrapheme := string(runes[0])
-					restAfter := string(runes[1:])
-					cursor := "\x1b[7m" + firstGrapheme + "\x1b[0m"
-					displayText = before + cursor + restAfter
-					// Recalculate width after adding cursor
-					lineVisibleWidth = fasttui.VisibleWidth(displayText)
-				}
-			} else {
-				// Cursor is at the end - add highlighted space
-				cursor := "\x1b[7m \x1b[0m"
-				displayText = before + cursor
-				lineVisibleWidth = lineVisibleWidth + 1
-
-				// If cursor overflows content width into the padding, flag it
-				if lineVisibleWidth > contentWidth && paddingX > 0 {
-					cursorInPadding = true
-				}
-			}
-		}
-
-		// Truncate again if cursor made it too long
-		if lineVisibleWidth > contentWidth {
-			displayText = fasttui.TruncateToWidth(displayText, contentWidth, "", false)
-			lineVisibleWidth = fasttui.VisibleWidth(displayText)
-		}
-
-		// Calculate padding based on actual visible width
-		padding := strings.Repeat(" ", max(0, contentWidth-lineVisibleWidth))
-
-		// Adjust right padding if cursor is in padding area
-		lineRightPadding := rightPadding
-		if cursorInPadding && len(rightPadding) > 0 {
-			lineRightPadding = rightPadding[1:]
-		}
-
-		// Render the line
-		renderedLine := leftPadding + displayText + padding + lineRightPadding
-
-		// Final safety check: ensure line doesn't exceed width
-		if fasttui.VisibleWidth(renderedLine) > width {
-			renderedLine = fasttui.TruncateToWidth(renderedLine, width, "", false)
-		}
-
-		result = append(result, renderedLine)
+		lineVisibleWith := fasttui.VisibleWidth(line.Text)
+		cursorInpadding := false
 	}
-
-	// Render bottom border (with scroll indicator if more content below)
-	linesBelow := len(layoutLines) - (e.scrollOffset + len(visibleLines))
-	if linesBelow > 0 {
-		indicator := "─── ↓ " + strconv.Itoa(linesBelow) + " more "
-		indicatorWidth := fasttui.VisibleWidth(indicator)
-		remaining := width - indicatorWidth
-		borderLine := indicator + strings.Repeat(horizontal, max(0, remaining))
-		// Ensure border doesn't exceed width
-		if fasttui.VisibleWidth(borderLine) > width {
-			borderLine = fasttui.TruncateToWidth(borderLine, width, "", false)
-		}
-		result = append(result, borderLine)
-	} else {
-		result = append(result, strings.Repeat(horizontal, width))
-	}
-
 	return result
+}
+
+func (e *Editor) renderTopBorder(width int, scrollOffset int) string {
+	indicator := fmt.Sprintf("─── ↑ %d more ", scrollOffset)
+	remaining := width - fasttui.VisibleWidth(indicator)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return indicator + strings.Repeat("─", remaining)
 }
 
 const CURSOR_MARKER = "\x1b_pi:c\x07" // Not used - we render visible cursor instead
