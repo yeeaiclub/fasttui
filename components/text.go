@@ -43,6 +43,14 @@ func (t *Text) Invalidate() {
 	t.cacheValid = false
 }
 
+func (t *Text) HandleInput(data string) {
+	// Text component doesn't handle input
+}
+
+func (t *Text) WantsKeyRelease() bool {
+	return false
+}
+
 func (t *Text) Render(width int) []string {
 	// Check cache
 	if t.cacheValid && t.cachedText == t.text && t.cachedWidth == width {
