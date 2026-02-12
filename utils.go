@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 )
@@ -18,7 +19,8 @@ const (
 )
 
 var (
-	widthCache = make(map[string]int)
+	widthCache      = make(map[string]int)
+	widthCacheMutex sync.RWMutex
 	// Pre-compile regex patterns for VisibleWidth
 	ansiCSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*[mGKHJ]`)
 	ansiOSCPattern = regexp.MustCompile(`\x1b\]8;;[^\x07]*\x07`)
@@ -79,9 +81,13 @@ func VisibleWidth(s string) int {
 		return 0
 	}
 
+	// Try to read from cache with read lock
+	widthCacheMutex.RLock()
 	if cached, ok := widthCache[s]; ok {
+		widthCacheMutex.RUnlock()
 		return cached
 	}
+	widthCacheMutex.RUnlock()
 
 	clean := s
 	if strings.Contains(clean, "\t") {
@@ -97,13 +103,17 @@ func VisibleWidth(s string) int {
 	// Count runes, not bytes
 	width := utf8.RuneCountInString(clean)
 
+	// Write to cache with write lock
+	widthCacheMutex.Lock()
 	if len(widthCache) >= widthCacheSize {
+		// Clear one entry to make room
 		for key := range widthCache {
 			delete(widthCache, key)
 			break
 		}
 	}
 	widthCache[s] = width
+	widthCacheMutex.Unlock()
 
 	return width
 }

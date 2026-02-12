@@ -73,10 +73,6 @@ func (app *ChatApp) Render(width int) []string {
 	historyLines := app.historyText.Render(width)
 	result = append(result, historyLines...)
 
-	// Add separator
-	separator := strings.Repeat("─", width)
-	result = append(result, "\x1b[36m"+separator+"\x1b[0m")
-
 	// Render editor
 	editorLines := app.editor.Render(width)
 	result = append(result, editorLines...)
@@ -99,9 +95,8 @@ func (app *ChatApp) HandleInput(data string) {
 		return
 	}
 
-	// Pass to editor
+	// Pass to editor - OnSubmit callback will trigger render if needed
 	app.editor.HandleInput(data)
-	app.tui.RequestRender(false)
 }
 
 func (app *ChatApp) WantsKeyRelease() bool {
