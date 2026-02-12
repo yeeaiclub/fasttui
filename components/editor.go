@@ -94,17 +94,77 @@ func (e *Editor) Render(width int) []string {
 		result = append(result, strings.Repeat(horizontal, width))
 	}
 
-	// for _, line := range visibleLines {
-	// 	displayText := line.Text
-	// 	lineVisibleWidth := fasttui.VisibleWidth(displayText)
+	// Render visible lines with padding and cursor
+	for _, line := range visibleLines {
+		displayText := line.Text
+		lineVisibleWidth := fasttui.VisibleWidth(displayText)
+		cursorInPadding := false
 
-	// 	if line.HasCursor {
-	// 		before := displayText[:line.CursorPos]
-	// 		after := displayText[line.CursorPos:]
-	// 	}
-	// }
+		// Add cursor if this line has it
+		if line.HasCursor {
+			before := displayText[:line.CursorPos]
+			after := displayText[line.CursorPos:]
+
+			// Hardware cursor marker (zero-width, emitted before fake cursor for IME positioning)
+			marker := ""
+			if e.focused {
+				marker = CURSOR_MARKER
+			}
+
+			if after != "" {
+				// Cursor is on a character - replace it with highlighted version
+				// Get the first rune from 'after'
+				runes := []rune(after)
+				if len(runes) > 0 {
+					firstRune := runes[0]
+					firstGrapheme := string(firstRune)
+					restAfter := string(runes[1:])
+					cursor := "\x1b[7m" + firstGrapheme + "\x1b[0m"
+					displayText = before + marker + cursor + restAfter
+					// lineVisibleWidth stays the same - we're replacing, not adding
+				}
+			} else {
+				// Cursor is at the end - add highlighted space
+				cursor := "\x1b[7m \x1b[0m"
+				displayText = before + marker + cursor
+				lineVisibleWidth = lineVisibleWidth + 1
+
+				// If cursor overflows content width into the padding, flag it
+				if lineVisibleWidth > contentWidth && paddingX > 0 {
+					cursorInPadding = true
+				}
+			}
+		}
+
+		// Calculate padding based on actual visible width
+		padding := strings.Repeat(" ", max(0, contentWidth-lineVisibleWidth))
+
+		// Adjust right padding if cursor is in padding area
+		lineRightPadding := rightPadding
+		if cursorInPadding && len(rightPadding) > 0 {
+			lineRightPadding = rightPadding[1:]
+		}
+
+		// Render the line (no side borders, just horizontal lines above and below)
+		result = append(result, leftPadding+displayText+padding+lineRightPadding)
+	}
+
+	// Render bottom border (with scroll indicator if more content below)
+	linesBelow := len(layoutLines) - (e.scrollOffset + len(visibleLines))
+	if linesBelow > 0 {
+		indicator := "─── ↓ " + strconv.Itoa(linesBelow) + " more "
+		indicatorWidth := fasttui.VisibleWidth(indicator)
+		remaining := width - indicatorWidth
+		borderLine := indicator + strings.Repeat(horizontal, max(0, remaining))
+		result = append(result, borderLine)
+	} else {
+		result = append(result, strings.Repeat(horizontal, width))
+	}
+
 	return result
 }
+
+const CURSOR_MARKER = "\x1b_pi:c\x07"
 
 func (e *Editor) IsFocused() bool {
 	return e.focused
@@ -119,6 +179,7 @@ func (e *Editor) WantsKeyRelease() bool {
 }
 
 func (e *Editor) Invalidate() {}
+
 func (e *Editor) handlePaste(data string) {
 	e.pasteBuffer += data
 	index := strings.Index(data, "\x1b[201~")
