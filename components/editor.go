@@ -2,6 +2,8 @@ package components
 
 import (
 	"strings"
+
+	"github.com/yeeaiclub/fasttui"
 )
 
 type Editor struct {
@@ -11,6 +13,11 @@ type Editor struct {
 	lastAction   string
 	undoStack    []EditorState
 	state        EditorState
+
+	paddingX    int
+	layoutWidth int
+
+	term fasttui.Terminal
 }
 
 type EditorState struct {
@@ -39,6 +46,17 @@ func (e *Editor) HandleInput(data string) {
 }
 
 func (e *Editor) Render(width int) {
+	maxPadding := max(0, (width-1)/2)
+	paddingX := min(e.paddingX, maxPadding)
+	contentWidth := max(1, width-paddingX*2)
+
+	layoutWidth := max(1, contentWidth)
+	e.layoutWidth = layoutWidth
+
+	layoutLines := e.layoutText(width)
+	_, height := e.term.GetSize()
+	maxVisibleLines = max(5, int(float64(height)*0.3))
+	return
 }
 
 func (e *Editor) handlePaste(data string) {
@@ -76,4 +94,15 @@ func (e *Editor) pushUndoSnapshot() {
 		lines:      append([]string{}, e.state.lines...),
 	}
 	e.undoStack = append(e.undoStack, state)
+}
+
+type LayoutLine struct {
+	Text      string
+	Hascursor string
+	CursorPos int
+}
+
+func (e *Editor) layoutText(width int) []LayoutLine {
+	var layoutLines []LayoutLine
+	return layoutLines
 }
