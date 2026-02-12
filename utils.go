@@ -94,7 +94,8 @@ func VisibleWidth(s string) int {
 		clean = ansiAPCPattern.ReplaceAllString(clean, "")
 	}
 
-	width := len(clean)
+	// Count runes, not bytes
+	width := utf8.RuneCountInString(clean)
 
 	if len(widthCache) >= widthCacheSize {
 		for key := range widthCache {
