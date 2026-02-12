@@ -49,7 +49,7 @@ type AutocompleteResult struct {
 
 // CombinedAutocompleteProvider handles both slash commands and file paths
 type CombinedAutocompleteProvider struct {
-	commands []interface{} // Can be SlashCommand or AutocompleteItem
+	commands []any // Can be SlashCommand or AutocompleteItem
 	basePath string
 	fdPath   string
 }
