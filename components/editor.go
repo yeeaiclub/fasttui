@@ -1,6 +1,7 @@
 package components
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/yeeaiclub/fasttui"
@@ -17,7 +18,10 @@ type Editor struct {
 	paddingX    int
 	layoutWidth int
 
-	term fasttui.Terminal
+	term         fasttui.Terminal
+	scrollOffset int
+
+	focused bool
 }
 
 type EditorState struct {
@@ -45,20 +49,76 @@ func (e *Editor) HandleInput(data string) {
 	}
 }
 
-func (e *Editor) Render(width int) {
+func (e *Editor) Render(width int) []string {
 	maxPadding := max(0, (width-1)/2)
 	paddingX := min(e.paddingX, maxPadding)
 	contentWidth := max(1, width-paddingX*2)
 
+	leftPadding := strings.Repeat(" ", paddingX)
+	rightPadding := leftPadding
+
 	layoutWidth := max(1, contentWidth)
 	e.layoutWidth = layoutWidth
 
-	layoutLines := e.layoutText(width)
 	_, height := e.term.GetSize()
-	maxVisibleLines = max(5, int(float64(height)*0.3))
-	return
+	maxVisibleLines := max(5, int(float64(height)*0.3))
+	layoutLines := e.layoutText(width)
+	index := 0
+	for i, line := range layoutLines {
+		if line.HasCursor {
+			index = i
+			break
+		}
+	}
+
+	if index < e.scrollOffset {
+		e.scrollOffset = index
+	} else if index >= e.scrollOffset+maxVisibleLines {
+		e.scrollOffset = index - maxVisibleLines + 1
+	}
+	maxScrollOffset := max(0, len(layoutLines)-maxVisibleLines)
+	e.scrollOffset = max(0, min(e.scrollOffset, maxScrollOffset))
+
+	visibleLines := layoutLines[e.scrollOffset : e.scrollOffset+maxVisibleLines]
+	var result []string
+
+	// Render top border (with scroll indicator if scrolled down)
+	horizontal := "─"
+	if e.scrollOffset > 0 {
+		indicator := "─── ↑ " + strconv.Itoa(e.scrollOffset) + " more "
+		indicatorWidth := fasttui.VisibleWidth(indicator)
+		remaining := width - indicatorWidth
+		borderLine := indicator + strings.Repeat(horizontal, max(0, remaining))
+		result = append(result, borderLine)
+	} else {
+		result = append(result, strings.Repeat(horizontal, width))
+	}
+
+	// for _, line := range visibleLines {
+	// 	displayText := line.Text
+	// 	lineVisibleWidth := fasttui.VisibleWidth(displayText)
+
+	// 	if line.HasCursor {
+	// 		before := displayText[:line.CursorPos]
+	// 		after := displayText[line.CursorPos:]
+	// 	}
+	// }
+	return result
 }
 
+func (e *Editor) IsFocused() bool {
+	return e.focused
+}
+
+func (e *Editor) SetFocused(focused bool) {
+	e.focused = focused
+}
+
+func (e *Editor) WantsKeyRelease() bool {
+	return true
+}
+
+func (e *Editor) Invalidate() {}
 func (e *Editor) handlePaste(data string) {
 	e.pasteBuffer += data
 	index := strings.Index(data, "\x1b[201~")
@@ -98,7 +158,7 @@ func (e *Editor) pushUndoSnapshot() {
 
 type LayoutLine struct {
 	Text      string
-	Hascursor string
+	HasCursor bool
 	CursorPos int
 }
 
