@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
+	"os"
+
 	"github.com/yeeaiclub/fasttui"
 	"github.com/yeeaiclub/fasttui/components"
 	"github.com/yeeaiclub/fasttui/terminal"
-	"os"
 )
 
 func main() {
@@ -42,6 +43,12 @@ func main() {
 	term := terminal.NewProcessTerminal()
 	tui := fasttui.NewTUI(term, true)
 
+	// Add title text
+	titleText := components.NewText("Git Command Selector", 2, 1, func(s string) string {
+		return "\x1b[44m\x1b[97m" + s + "\x1b[0m" // Blue background, white text
+	})
+	tui.AddChild(titleText)
+
 	// Add border
 	tui.AddChild(components.NewDynamicBorder(func(s string) string { return s }))
 
@@ -71,6 +78,10 @@ func main() {
 
 	// Add bottom border
 	tui.AddChild(components.NewDynamicBorder(func(s string) string { return s }))
+
+	// Add help text at bottom
+	helpText := components.NewText("↑/↓: Navigate | Enter: Select | Esc: Cancel", 1, 0, nil)
+	tui.AddChild(helpText)
 
 	// Start TUI
 	tui.Start()
