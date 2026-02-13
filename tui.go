@@ -339,10 +339,10 @@ func (t *TUI) doRender() {
 	buffer.WriteString("\x1b[?2026l") // End synchronized output
 
 	// Debug logging if enabled
-	if os.Getenv("PI_TUI_DEBUG") == "1" {
-		t.writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
-			renderEnd, row, col, height, newLines)
-	}
+	// if os.Getenv("PI_TUI_DEBUG") == "1" {
+	// 	t.writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
+	// 		renderEnd, row, col, height, newLines)
+	// }
 
 	// Write entire buffer at once
 	t.terminal.Write(buffer.String())
@@ -371,7 +371,7 @@ func (t *TUI) fullRender(newLines []string, height int, row int, col int, width 
 		if clear {
 			buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
 		}
-		for i := 0; i < len(newLines); i++ {
+		for i := range newLines {
 			if i > 0 {
 				buffer.WriteString("\r\n")
 			}

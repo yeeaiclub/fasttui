@@ -44,7 +44,7 @@ type EditorState struct {
 	cursorCol  int
 }
 
-func NewEditor(term fasttui.Terminal) *Editor {
+func NewEditor(term fasttui.Terminal, submit func(text string)) *Editor {
 	return &Editor{
 		undoStack:    make([]EditorState, 0),
 		state:        EditorState{lines: []string{""}},
@@ -52,6 +52,7 @@ func NewEditor(term fasttui.Terminal) *Editor {
 		history:      make([]string, 0),
 		killRing:     make([]string, 0),
 		term:         term,
+		OnSubmit:     submit,
 		borderColor: func(s string) string {
 			return s
 		},
@@ -91,6 +92,12 @@ func (e *Editor) HandleInput(data string) {
 	if kb.Matches(data, keys.EditorActionUndo) {
 		e.undo()
 		return
+	}
+
+	if kb.Matches(data, keys.EditorActionSubmit) {
+		if e.OnSubmit != nil {
+			e.OnSubmit(data)
+		}
 	}
 }
 
@@ -198,9 +205,7 @@ func (e *Editor) Render(width int) []string {
 
 	linesBelow := len(layoutLines) - (e.scrollOffset + len(visibleLines))
 	if linesBelow > 0 {
-		//indicator := fmt.Sprintf("%s")`─── ↓ ${linesBelow} more `
-		// remaining := width - fasttui.VisibleWidth(indicator)
-		// result.push(this.borderColor(indicator + "─".repeat(Math.max(0, remaining))))
+		e.renderButtomBorder(width, linesBelow)
 		result = append(result, strings.Repeat(horizontal, width))
 	} else {
 		result = append(result, strings.Repeat(horizontal, width))
@@ -210,6 +215,12 @@ func (e *Editor) Render(width int) []string {
 
 func (e *Editor) renderTopBorder(width int, scrollOffset int) string {
 	indicator := fmt.Sprintf("─── ↑ %d more ", scrollOffset)
+	remaining := max(width-fasttui.VisibleWidth(indicator), 0)
+	return indicator + strings.Repeat("─", remaining)
+}
+
+func (e *Editor) renderButtomBorder(width int, scrollOffset int) string {
+	indicator := fmt.Sprintf("─── ↓ %d more ", scrollOffset)
 	remaining := max(width-fasttui.VisibleWidth(indicator), 0)
 	return indicator + strings.Repeat("─", remaining)
 }
