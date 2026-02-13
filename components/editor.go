@@ -44,13 +44,17 @@ type EditorState struct {
 	cursorCol  int
 }
 
-func NewEditor() *Editor {
+func NewEditor(term fasttui.Terminal) *Editor {
 	return &Editor{
 		undoStack:    make([]EditorState, 0),
 		state:        EditorState{lines: []string{""}},
 		historyIndex: -1,
 		history:      make([]string, 0),
 		killRing:     make([]string, 0),
+		term:         term,
+		borderColor: func(s string) string {
+			return s
+		},
 	}
 }
 
@@ -97,7 +101,7 @@ func (e *Editor) Render(width int) []string {
 
 	layoutWidth := 1
 	if paddingX > 0 {
-		layoutWidth = max(layoutWidth, contentWidth-paddingX)
+		layoutWidth = max(layoutWidth, contentWidth)
 	} else {
 		layoutWidth = max(layoutWidth, contentWidth-1)
 	}
@@ -131,7 +135,8 @@ func (e *Editor) Render(width int) []string {
 	e.scrollOffset = max(0, min(e.scrollOffset, maxScrollOffset))
 
 	// Get visible lines slice
-	visibleLines := layoutLines[e.scrollOffset : e.scrollOffset+maxVisibleLines]
+	endIndex := min(e.scrollOffset+maxVisibleLines, len(layoutLines))
+	visibleLines := layoutLines[e.scrollOffset:endIndex]
 
 	var result []string
 	leftPadding := strings.Repeat(" ", paddingX)
@@ -147,9 +152,11 @@ func (e *Editor) Render(width int) []string {
 		displayText := line.Text
 		lineVisibleWith := fasttui.VisibleWidth(line.Text)
 		cursorInpadding := false
-		if line.HasCursor {
-			before := displayText[:line.CursorPos]
-			after := displayText[line.CursorPos:]
+		if line.HasCursor && line.CursorPos != 0 {
+			// Ensure CursorPos is within bounds
+			cursorPos := min(line.CursorPos, len(displayText))
+			before := displayText[:cursorPos]
+			after := displayText[cursorPos:]
 			marker := ""
 			if e.focused {
 				marker = CURSOR_MARKER
