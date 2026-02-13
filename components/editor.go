@@ -341,6 +341,29 @@ func (e *Editor) Render(width int) []string {
 				}
 			}
 		}
+
+		// Truncate displayText if it exceeds contentWidth
+		if fasttui.VisibleWidth(displayText) > contentWidth {
+			// Truncate to fit within contentWidth
+			truncated := ""
+			currentWidth := 0
+			for _, r := range displayText {
+				// Skip ANSI escape sequences
+				if r == '\x1b' {
+					truncated += string(r)
+					continue
+				}
+				rw := runeWidth(r)
+				if currentWidth+rw > contentWidth {
+					break
+				}
+				truncated += string(r)
+				currentWidth += rw
+			}
+			displayText = truncated
+			lineVisibleWith = fasttui.VisibleWidth(displayText)
+		}
+
 		padding := strings.Repeat(" ", max(0, contentWidth-lineVisibleWith))
 		var lineRenderPadding string
 		if cursorInpadding {
@@ -349,6 +372,13 @@ func (e *Editor) Render(width int) []string {
 			lineRenderPadding = rightPadding
 		}
 		lineRender := leftPadding + displayText + padding + lineRenderPadding
+
+		// Final safety check: ensure line doesn't exceed width
+		if fasttui.VisibleWidth(lineRender) > width {
+			// Truncate to exact width without ellipsis
+			lineRender = fasttui.TruncateToWidth(lineRender, width, "", false)
+		}
+
 		result = append(result, lineRender)
 	}
 
