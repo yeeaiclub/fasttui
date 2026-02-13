@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"math/rand"
 	"strings"
 	"time"
@@ -89,8 +88,6 @@ func main() {
 
 	// Create editor
 	editor := components.NewEditor(term, func(value string) {
-
-		fmt.Println("--------------->")
 		// Prevent submission if already responding
 		if isResponding {
 			return
