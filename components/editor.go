@@ -60,6 +60,8 @@ func NewEditor(term fasttui.Terminal, submit func(text string)) *Editor {
 }
 
 func (e *Editor) HandleInput(data string) {
+	kb := keys.GetEditorKeybindings()
+
 	// Handle bracketed paste mode
 	if strings.Contains(data, "\x1b[200~") {
 		e.isInPaste = true
@@ -81,23 +83,170 @@ func (e *Editor) HandleInput(data string) {
 			if len(remaining) > 0 {
 				e.HandleInput(remaining)
 			}
+			return
 		}
 		return
 	}
-	kb := keys.GetEditorKeybindings()
+
+	// Ctrl+C - let parent handle (exit/clear)
 	if kb.Matches(data, keys.EditorActionCopy) {
 		return
 	}
 
+	// Undo
 	if kb.Matches(data, keys.EditorActionUndo) {
 		e.undo()
 		return
 	}
 
+	// Tab - trigger completion (placeholder for future autocomplete)
+	if kb.Matches(data, keys.EditorActionTab) {
+		// TODO: handleTabCompletion()
+		return
+	}
+
+	// Deletion actions
+	if kb.Matches(data, keys.EditorActionDeleteToLineEnd) {
+		e.deleteToEndOfLine()
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionDeleteToLineStart) {
+		e.deleteToStartOfLine()
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionDeleteWordBackward) {
+		e.deleteWordBackwards()
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionDeleteWordForward) {
+		e.deleteWordForward()
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionDeleteCharBackward) || keys.MatchesKey(data, "shift+backspace") {
+		e.handleBackspace()
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionDeleteCharForward) || keys.MatchesKey(data, "shift+delete") {
+		e.handleForwardDelete()
+		return
+	}
+
+	// Kill ring actions
+	if kb.Matches(data, keys.EditorActionYank) {
+		e.yank()
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionYankPop) {
+		e.yankPop()
+		return
+	}
+
+	// Cursor movement actions
+	if kb.Matches(data, keys.EditorActionCursorLineStart) {
+		e.moveToLineStart()
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionCursorLineEnd) {
+		e.moveToLineEnd()
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionCursorWordLeft) {
+		e.moveWordBackwards()
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionCursorWordRight) {
+		e.moveWordForwards()
+		return
+	}
+
+	// New line (Shift+Enter, Alt+Enter, etc.)
+	if kb.Matches(data, keys.EditorActionNewLine) ||
+		(len(data) > 1 && data[0] == 10) ||
+		data == "\x1b\r" ||
+		data == "\x1b[13;2~" ||
+		(len(data) > 1 && strings.Contains(data, "\x1b") && strings.Contains(data, "\r")) ||
+		(data == "\n" && len(data) == 1) {
+		e.addNewLine()
+		return
+	}
+
+	// Submit (Enter)
 	if kb.Matches(data, keys.EditorActionSubmit) {
-		if e.OnSubmit != nil {
-			e.OnSubmit(data)
+		// Workaround for terminals without Shift+Enter support:
+		// If char before cursor is \, delete it and insert newline instead of submitting.
+		currentLine := ""
+		if e.state.cursorLine < len(e.state.lines) {
+			currentLine = e.state.lines[e.state.cursorLine]
 		}
+		if e.state.cursorCol > 0 && e.state.cursorCol <= len(currentLine) && currentLine[e.state.cursorCol-1] == '\\' {
+			e.handleBackspace()
+			e.addNewLine()
+			return
+		}
+		e.handleSubmit()
+		return
+	}
+
+	// Arrow key navigation (with history support)
+	if kb.Matches(data, keys.EditorActionCursorUp) {
+		if len(e.history) > 0 && e.historyIndex > -1 && e.isOnFirstVisualLine() {
+			e.navigateHistory(-1)
+		} else if e.isEditorEmpty() && len(e.history) > 0 {
+			e.navigateHistory(-1)
+		} else {
+			e.moveCursor(-1, 0)
+		}
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionCursorDown) {
+		if e.historyIndex > -1 && e.isOnLastVisualLine() {
+			e.navigateHistory(1)
+		} else {
+			e.moveCursor(1, 0)
+		}
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionCursorRight) {
+		e.moveCursor(0, 1)
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionCursorLeft) {
+		e.moveCursor(0, -1)
+		return
+	}
+
+	// Page up/down - scroll by page and move cursor
+	if kb.Matches(data, keys.EditorActionPageUp) {
+		e.pageScroll(-1)
+		return
+	}
+
+	if kb.Matches(data, keys.EditorActionPageDown) {
+		e.pageScroll(1)
+		return
+	}
+
+	// Shift+Space - insert regular space
+	if keys.MatchesKey(data, "shift+space") {
+		e.insertCharacter(" ")
+		return
+	}
+
+	// Regular characters
+	if len(data) > 0 && data[0] >= 32 {
+		e.insertCharacter(data)
 	}
 }
 
@@ -1114,4 +1263,92 @@ func (e *Editor) handleSubmit() {
 // GetTextString returns text as a single string
 func (e *Editor) GetTextString() string {
 	return strings.Join(e.state.lines, "\n")
+}
+
+// isEditorEmpty checks if the editor is empty
+func (e *Editor) isEditorEmpty() bool {
+	return len(e.state.lines) == 1 && e.state.lines[0] == ""
+}
+
+// isOnFirstVisualLine checks if cursor is on the first visual line
+func (e *Editor) isOnFirstVisualLine() bool {
+	return e.state.cursorLine == 0
+}
+
+// isOnLastVisualLine checks if cursor is on the last visual line
+func (e *Editor) isOnLastVisualLine() bool {
+	return e.state.cursorLine >= len(e.state.lines)-1
+}
+
+// navigateHistory navigates through command history
+func (e *Editor) navigateHistory(direction int) {
+	if len(e.history) == 0 {
+		return
+	}
+
+	// Save current input if we're starting history navigation
+	if e.historyIndex == -1 && direction < 0 {
+		e.historyIndex = len(e.history)
+	}
+
+	e.historyIndex += direction
+
+	// Clamp to valid range
+	if e.historyIndex < 0 {
+		e.historyIndex = 0
+	}
+	if e.historyIndex > len(e.history) {
+		e.historyIndex = len(e.history)
+	}
+
+	// Load history entry or clear if at end
+	if e.historyIndex < len(e.history) {
+		historyText := e.history[e.historyIndex]
+		e.state.lines = strings.Split(historyText, "\n")
+		e.state.cursorLine = len(e.state.lines) - 1
+		e.state.cursorCol = len(e.state.lines[e.state.cursorLine])
+	} else {
+		e.state.lines = []string{""}
+		e.state.cursorLine = 0
+		e.state.cursorCol = 0
+	}
+
+	if e.OnChange != nil {
+		e.OnChange(e.GetTextString())
+	}
+}
+
+// pageScroll scrolls by page and moves cursor
+func (e *Editor) pageScroll(direction int) {
+	// Calculate page size (assuming a reasonable default)
+	pageSize := 10
+
+	if direction < 0 {
+		// Page up
+		newLine := e.state.cursorLine - pageSize
+		if newLine < 0 {
+			newLine = 0
+		}
+		e.state.cursorLine = newLine
+		e.scrollOffset -= pageSize
+		if e.scrollOffset < 0 {
+			e.scrollOffset = 0
+		}
+	} else {
+		// Page down
+		newLine := e.state.cursorLine + pageSize
+		if newLine >= len(e.state.lines) {
+			newLine = len(e.state.lines) - 1
+		}
+		e.state.cursorLine = newLine
+		e.scrollOffset += pageSize
+	}
+
+	// Ensure cursor column is valid for new line
+	if e.state.cursorLine < len(e.state.lines) {
+		lineLen := len(e.state.lines[e.state.cursorLine])
+		if e.state.cursorCol > lineLen {
+			e.state.cursorCol = lineLen
+		}
+	}
 }
