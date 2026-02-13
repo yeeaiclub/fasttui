@@ -159,7 +159,7 @@ func (e *Editor) Render(width int) []string {
 		displayText := line.Text
 		lineVisibleWith := fasttui.VisibleWidth(line.Text)
 		cursorInpadding := false
-		if line.HasCursor && line.CursorPos != 0 {
+		if line.HasCursor {
 			// Ensure CursorPos is within bounds
 			cursorPos := min(line.CursorPos, len(displayText))
 			before := displayText[:cursorPos]
@@ -228,7 +228,7 @@ func (e *Editor) renderButtomBorder(width int, scrollOffset int) string {
 const CURSOR_MARKER = "\x1b_pi:c\x07" // Not used - we render visible cursor instead
 
 func (e *Editor) IsFocused() bool {
-	return e.focused
+	return true
 }
 
 func (e *Editor) SetFocused(focused bool) {
