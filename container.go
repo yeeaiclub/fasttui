@@ -46,3 +46,25 @@ func (c *Container) HandleInput(data string) {
 func (c *Container) WantsKeyRelease() bool {
 	return false
 }
+
+func (c *Container) GetChildren() []Component {
+	return c.children
+}
+
+func (c *Container) RemoveChildAt(index int) {
+	if index >= 0 && index < len(c.children) {
+		c.children = append(c.children[:index], c.children[index+1:]...)
+	}
+}
+
+func (c *Container) InsertChildAt(index int, component Component) {
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(c.children) {
+		c.children = append(c.children, component)
+		return
+	}
+	c.children = append(c.children[:index+1], c.children[index:]...)
+	c.children[index] = component
+}
