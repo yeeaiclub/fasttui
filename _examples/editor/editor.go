@@ -9,7 +9,8 @@ import (
 func main() {
 	term := terminal.NewProcessTerminal()
 	tui := fasttui.NewTUI(term, true)
-	editor := components.NewEditor(term)
+	editor := components.NewEditor(term, func(v string) {
+	})
 	tui.AddChild(editor)
 	tui.SetFocus(editor)
 
