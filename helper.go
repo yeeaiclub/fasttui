@@ -7,6 +7,7 @@ import (
 	"strings"
 )
 
+// TUI helper methods - kept for backward compatibility
 func (t *TUI) SetShowHardwareCursor(enabled bool) {
 	if t.showHardwareCursor == enabled {
 		return
@@ -31,29 +32,11 @@ func (t *TUI) QueryCellSize() {
 }
 
 func (t *TUI) resolveAnchorRow(anchor OverlayAnchor, height int, availHeight int, marginTop int) int {
-	switch anchor {
-	case AnchorTopLeft, AnchorTopCenter, AnchorTopRight:
-		return marginTop
-	case AnchorBottomLeft, AnchorBottomCenter, AnchorBottomRight:
-		return marginTop + max(0, availHeight-height)
-	case AnchorLeftCenter, AnchorRightCenter, AnchorCenter:
-		return marginTop + max(0, availHeight-height)/2
-	default:
-		return marginTop
-	}
+	return resolveAnchorRow(anchor, height, availHeight, marginTop)
 }
 
 func (t *TUI) resolveAnchorCol(anchor OverlayAnchor, width int, availWidth int, marginLeft int) int {
-	switch anchor {
-	case AnchorTopLeft, AnchorBottomLeft, AnchorLeftCenter:
-		return marginLeft
-	case AnchorTopRight, AnchorBottomRight, AnchorRightCenter:
-		return marginLeft + max(0, availWidth-width)
-	case AnchorTopCenter, AnchorBottomCenter, AnchorCenter:
-		return marginLeft + max(0, availWidth-width)/2
-	default:
-		return marginLeft
-	}
+	return resolveAnchorCol(anchor, width, availWidth, marginLeft)
 }
 
 func (t *TUI) GetFullRedraws() int {
@@ -65,7 +48,6 @@ func (t *TUI) GetShowHardwareCursor() bool {
 }
 
 func (t *TUI) positionHardwareCursor(row int, col int, totalLines int) {
-	// Check if no cursor position was found (row == -1, col == -1)
 	if (row < 0 || col < 0) || totalLines <= 0 {
 		t.terminal.HideCursor()
 		return
@@ -78,10 +60,8 @@ func (t *TUI) positionHardwareCursor(row int, col int, totalLines int) {
 	var builder strings.Builder
 
 	if rowDelta > 0 {
-		// move down
 		builder.WriteString(fmt.Sprintf("\x1b[%dB", rowDelta))
 	} else if rowDelta < 0 {
-		// move up
 		builder.WriteString(fmt.Sprintf("\x1b[%dA", -rowDelta))
 	}
 
@@ -189,3 +169,8 @@ func applyLineRests(lines []string) []string {
 	}
 	return result
 }
+
+// Shared constants
+var CursorMarker = "\x1b_pi:c\x07"
+var CURSOR_MARKER = "\x1b_pi:c\x07"
+var SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"

@@ -10,3 +10,7 @@ func NewOverlay() *Overlay {
 func (o *Overlay) Render(with int) []string {
 	return nil
 }
+
+func (o *Overlay) ResolveOverlayLayout() {
+
+}
