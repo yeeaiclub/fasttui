@@ -2,9 +2,10 @@ package components
 
 import (
 	"fmt"
-	"github.com/yeeaiclub/fasttui/keys"
 	"strings"
 	"unicode"
+
+	"github.com/yeeaiclub/fasttui/keys"
 
 	"github.com/yeeaiclub/fasttui"
 )
@@ -125,12 +126,13 @@ func (e *Editor) Render(width int) []string {
 	} else if cursorLineIndex >= e.scrollOffset+maxVisibleLines {
 		e.scrollOffset = cursorLineIndex - maxVisibleLines + 1
 	}
+
 	maxScrollOffset := max(0, len(layoutLines)-maxVisibleLines)
 	e.scrollOffset = max(0, min(e.scrollOffset, maxScrollOffset))
 
 	// Get visible lines slice
-	endIndex := min(e.scrollOffset+maxVisibleLines, len(layoutLines))
 	visibleLines := layoutLines[e.scrollOffset : e.scrollOffset+maxVisibleLines]
+
 	var result []string
 	leftPadding := strings.Repeat(" ", paddingX)
 	rightPadding := leftPadding
@@ -138,23 +140,70 @@ func (e *Editor) Render(width int) []string {
 	if e.scrollOffset > 0 {
 		result = append(result, e.renderTopBorder(width, e.scrollOffset))
 	} else {
-		result = append(result, strings.Repeat("─", width))
+		result = append(result, strings.Repeat(horizontal, width))
 	}
 
 	for _, line := range visibleLines {
 		displayText := line.Text
 		lineVisibleWith := fasttui.VisibleWidth(line.Text)
 		cursorInpadding := false
+		if line.HasCursor {
+			before := displayText[:line.CursorPos]
+			after := displayText[line.CursorPos:]
+			marker := ""
+			if e.focused {
+				marker = CURSOR_MARKER
+			}
+			if len(after) > 0 {
+				// Get the first grapheme (rune) from 'after'
+				afterRunes := []rune(after)
+				var firstGrapheme string
+				var restAfter string
+				if len(afterRunes) > 0 {
+					firstGrapheme = string(afterRunes[0])
+					restAfter = string(afterRunes[1:])
+				} else {
+					firstGrapheme = ""
+					restAfter = ""
+				}
+				cursor := "\x1b[7m" + firstGrapheme + "\x1b[0m"
+				displayText = before + marker + cursor + restAfter
+				// lineVisibleWith stays the same - we're replacing, not adding
+			} else {
+				cursor := "\x1b[7m \x1b[0m"
+				displayText = before + marker + cursor
+				lineVisibleWith = lineVisibleWith + 1
+				if lineVisibleWith > contentWidth && paddingX > 0 {
+					cursorInpadding = true
+				}
+			}
+		}
+		padding := strings.Repeat(" ", max(0, contentWidth-lineVisibleWith))
+		var lineRenderPadding string
+		if cursorInpadding {
+			lineRenderPadding = string(rightPadding[1])
+		} else {
+			lineRenderPadding = rightPadding
+		}
+		lineRender := leftPadding + displayText + padding + lineRenderPadding
+		result = append(result, lineRender)
+	}
+
+	linesBelow := len(layoutLines) - (e.scrollOffset + len(visibleLines))
+	if linesBelow > 0 {
+		//indicator := fmt.Sprintf("%s")`─── ↓ ${linesBelow} more `
+		// remaining := width - fasttui.VisibleWidth(indicator)
+		// result.push(this.borderColor(indicator + "─".repeat(Math.max(0, remaining))))
+		result = append(result, strings.Repeat(horizontal, width))
+	} else {
+		result = append(result, strings.Repeat(horizontal, width))
 	}
 	return result
 }
 
 func (e *Editor) renderTopBorder(width int, scrollOffset int) string {
 	indicator := fmt.Sprintf("─── ↑ %d more ", scrollOffset)
-	remaining := width - fasttui.VisibleWidth(indicator)
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(width-fasttui.VisibleWidth(indicator), 0)
 	return indicator + strings.Repeat("─", remaining)
 }
 
