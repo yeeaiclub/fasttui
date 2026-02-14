@@ -57,7 +57,7 @@ type AnsiCodeTracker struct {
 	bgColor       string
 }
 
-func GetSegmenter() interface{} {
+func GetSegmenter() any {
 	return nil
 }
 
