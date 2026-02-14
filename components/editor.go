@@ -354,7 +354,7 @@ func (e *Editor) Render(width int) []string {
 
 	linesBelow := len(layoutLines) - (e.scrollOffset + len(visibleLines))
 	if linesBelow > 0 {
-		e.renderButtomBorder(width, linesBelow)
+		e.renderButtonBorder(width, linesBelow)
 		result = append(result, strings.Repeat(horizontal, width))
 	} else {
 		result = append(result, strings.Repeat(horizontal, width))
@@ -368,7 +368,7 @@ func (e *Editor) renderTopBorder(width int, scrollOffset int) string {
 	return indicator + strings.Repeat("─", remaining)
 }
 
-func (e *Editor) renderButtomBorder(width int, scrollOffset int) string {
+func (e *Editor) renderButtonBorder(width int, scrollOffset int) string {
 	indicator := fmt.Sprintf("─── ↓ %d more ", scrollOffset)
 	remaining := max(width-fasttui.VisibleWidth(indicator), 0)
 	return indicator + strings.Repeat("─", remaining)
