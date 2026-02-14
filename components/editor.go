@@ -307,7 +307,7 @@ func (e *Editor) Render(width int) []string {
 	for _, line := range visibleLines {
 		displayText := line.Text
 		lineVisibleWith := fasttui.VisibleWidth(line.Text)
-		cursorInpadding := false
+		cursorInPadding := false
 		if line.HasCursor {
 			// Ensure CursorPos is within bounds
 			cursorPos := min(line.CursorPos, len(displayText))
@@ -337,13 +337,13 @@ func (e *Editor) Render(width int) []string {
 				displayText = before + marker + cursor
 				lineVisibleWith = lineVisibleWith + 1
 				if lineVisibleWith > contentWidth && paddingX > 0 {
-					cursorInpadding = true
+					cursorInPadding = true
 				}
 			}
 		}
 		padding := strings.Repeat(" ", max(0, contentWidth-lineVisibleWith))
 		var lineRenderPadding string
-		if cursorInpadding {
+		if cursorInPadding {
 			lineRenderPadding = string(rightPadding[1])
 		} else {
 			lineRenderPadding = rightPadding
