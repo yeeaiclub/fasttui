@@ -100,18 +100,12 @@ func (t *TUI) doRender() {
 		ct := targetRow - viewportTop
 		return ct - cs
 	}
-	// render all components in container
-	newLines := t.Render(width)
-	if len(t.overlayStacks) > 0 {
-		newLines = t.compositeOverlays(newLines, width, height)
-	}
-
+	newLines := t.renderComponent(width, height)
 	row, col := extractCursorPosition(newLines, height)
 	newLines = applyLineRests(newLines)
+
 	widthChanged := t.previousWidth != 0 && t.previousWidth != width
-
-	fullRender := t.fullRender(newLines, height, row, col, width)
-
+	fullRender := t.getFullRender(newLines, height, row, col, width)
 	if len(t.previousLines) == 0 && !widthChanged {
 		fullRender(false)
 		return
@@ -297,12 +291,6 @@ func (t *TUI) doRender() {
 
 	buffer.WriteString("\x1b[?2026l") // End synchronized output
 
-	// Debug logging if enabled
-	// if os.Getenv("PI_TUI_DEBUG") == "1" {
-	// 	writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
-	// 		renderEnd, row, col, height, t.cursorRow, newLines, t.previousLines)
-	// }
-
 	// Write entire buffer at once
 	t.terminal.Write(buffer.String())
 
@@ -322,7 +310,16 @@ func (t *TUI) doRender() {
 	t.previousWidth = width
 }
 
-func (t *TUI) fullRender(newLines []string, height int, row int, col int, width int) func(clear bool) {
+func (t *TUI) renderComponent(width int, height int) []string {
+	// render all components in container
+	newLines := t.Render(width)
+	if len(t.overlayStacks) > 0 {
+		newLines = t.compositeOverlays(newLines, width, height)
+	}
+	return newLines
+}
+
+func (t *TUI) getFullRender(newLines []string, height int, row int, col int, width int) func(clear bool) {
 	fullRender := func(clear bool) {
 		t.fullRedrawCount++
 		var buffer strings.Builder
@@ -455,7 +452,7 @@ func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, ter
 		if anchor == "" {
 			anchor = AnchorCenter
 		}
-		row = t.resolveAnchorRow(anchor, effectiveHeight, availHeight, marginTop)
+		row = anchor.getRow(effectiveHeight, availHeight, marginTop)
 	}
 
 	if options.Col != 0 {
@@ -465,7 +462,7 @@ func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, ter
 		if anchor == "" {
 			anchor = AnchorCenter
 		}
-		col = t.resolveAnchorCol(anchor, width, availWidth, marginLeft)
+		col = anchor.getCol(width, availWidth, marginLeft)
 	}
 
 	if options.OffsetY != 0 {
@@ -838,32 +835,6 @@ func (t *TUI) QueryCellSize() {
 	}
 	t.cellSizeQueryPending = true
 	t.terminal.Write("\x1b[16t")
-}
-
-func (t *TUI) resolveAnchorRow(anchor OverlayAnchor, height int, availHeight int, marginTop int) int {
-	switch anchor {
-	case AnchorTopLeft, AnchorTopCenter, AnchorTopRight:
-		return marginTop
-	case AnchorBottomLeft, AnchorBottomCenter, AnchorBottomRight:
-		return marginTop + max(0, availHeight-height)
-	case AnchorLeftCenter, AnchorRightCenter, AnchorCenter:
-		return marginTop + max(0, availHeight-height)/2
-	default:
-		return marginTop
-	}
-}
-
-func (t *TUI) resolveAnchorCol(anchor OverlayAnchor, width int, availWidth int, marginLeft int) int {
-	switch anchor {
-	case AnchorTopLeft, AnchorBottomLeft, AnchorLeftCenter:
-		return marginLeft
-	case AnchorTopRight, AnchorBottomRight, AnchorRightCenter:
-		return marginLeft + max(0, availWidth-width)
-	case AnchorTopCenter, AnchorBottomCenter, AnchorCenter:
-		return marginLeft + max(0, availWidth-width)/2
-	default:
-		return marginLeft
-	}
 }
 
 func (t *TUI) GetFullRedraws() int {

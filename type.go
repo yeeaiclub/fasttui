@@ -55,6 +55,32 @@ const (
 	AnchorRightCenter  OverlayAnchor = "right-center"
 )
 
+func (anchor OverlayAnchor) getCol(width int, availWidth int, marginLeft int) int {
+	switch anchor {
+	case AnchorTopLeft, AnchorBottomLeft, AnchorLeftCenter:
+		return marginLeft
+	case AnchorTopRight, AnchorBottomRight, AnchorRightCenter:
+		return marginLeft + max(0, availWidth-width)
+	case AnchorTopCenter, AnchorBottomCenter, AnchorCenter:
+		return marginLeft + max(0, availWidth-width)/2
+	default:
+		return marginLeft
+	}
+}
+
+func (anchor OverlayAnchor) getRow(height int, availHeight int, marginTop int) int {
+	switch anchor {
+	case AnchorTopLeft, AnchorTopCenter, AnchorTopRight:
+		return marginTop
+	case AnchorBottomLeft, AnchorBottomCenter, AnchorBottomRight:
+		return marginTop + max(0, availHeight-height)
+	case AnchorLeftCenter, AnchorRightCenter, AnchorCenter:
+		return marginTop + max(0, availHeight-height)/2
+	default:
+		return marginTop
+	}
+}
+
 type OverlayOption struct {
 	Width     int
 	MiniWidth int

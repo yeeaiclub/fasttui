@@ -64,6 +64,7 @@ func parseMargin(margin any) (marginTop, marginRight, marginBottom, marginLeft i
 // Returns (-1, -1) if no cursor marker is found. The search starts from the bottom
 // of the visible viewport and goes upward.
 func extractCursorPosition(lines []string, height int) (int, int) {
+	// Start from the bottom of the visible viewport
 	viewportTop := max(0, len(lines)-height)
 	for row := len(lines) - 1; row >= viewportTop; row-- {
 		line := lines[row]
