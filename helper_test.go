@@ -355,3 +355,120 @@ func TestApplyLineRests(t *testing.T) {
 		})
 	}
 }
+
+func TestFindChangedLineRange(t *testing.T) {
+	tests := []struct {
+		name          string
+		oldLines      []string
+		newLines      []string
+		wantFirst     int
+		wantLast      int
+	}{
+		{
+			name:          "identical lines return -1, -1",
+			oldLines:      []string{"hello", "world"},
+			newLines:      []string{"hello", "world"},
+			wantFirst:     -1,
+			wantLast:      -1,
+		},
+		{
+			name:          "single line changed",
+			oldLines:      []string{"hello", "world"},
+			newLines:      []string{"hello", "changed"},
+			wantFirst:     1,
+			wantLast:      1,
+		},
+		{
+			name:          "multiple lines changed",
+			oldLines:      []string{"line1", "line2", "line3", "line4"},
+			newLines:      []string{"line1", "changed2", "changed3", "line4"},
+			wantFirst:     1,
+			wantLast:      2,
+		},
+		{
+			name:          "first line changed",
+			oldLines:      []string{"old", "line2", "line3"},
+			newLines:      []string{"new", "line2", "line3"},
+			wantFirst:     0,
+			wantLast:      0,
+		},
+		{
+			name:          "last line changed",
+			oldLines:      []string{"line1", "line2", "old"},
+			newLines:      []string{"line1", "line2", "new"},
+			wantFirst:     2,
+			wantLast:      2,
+		},
+		{
+			name:          "new lines appended",
+			oldLines:      []string{"line1", "line2"},
+			newLines:      []string{"line1", "line2", "line3", "line4"},
+			wantFirst:     2,
+			wantLast:      3,
+		},
+		{
+			name:          "lines removed",
+			oldLines:      []string{"line1", "line2", "line3", "line4"},
+			newLines:      []string{"line1", "line2"},
+			wantFirst:     2,
+			wantLast:      3,
+		},
+		{
+			name:          "empty old lines",
+			oldLines:      []string{},
+			newLines:      []string{"line1", "line2"},
+			wantFirst:     0,
+			wantLast:      1,
+		},
+		{
+			name:          "empty new lines",
+			oldLines:      []string{"line1", "line2"},
+			newLines:      []string{},
+			wantFirst:     0,
+			wantLast:      1,
+		},
+		{
+			name:          "both empty",
+			oldLines:      []string{},
+			newLines:      []string{},
+			wantFirst:     -1,
+			wantLast:      -1,
+		},
+		{
+			name:          "all lines changed",
+			oldLines:      []string{"a", "b", "c"},
+			newLines:      []string{"x", "y", "z"},
+			wantFirst:     0,
+			wantLast:      2,
+		},
+		{
+			name:          "single line unchanged",
+			oldLines:      []string{"same"},
+			newLines:      []string{"same"},
+			wantFirst:     -1,
+			wantLast:      -1,
+		},
+		{
+			name:          "single line changed",
+			oldLines:      []string{"old"},
+			newLines:      []string{"new"},
+			wantFirst:     0,
+			wantLast:      0,
+		},
+		{
+			name:          "different lengths with common prefix",
+			oldLines:      []string{"prefix", "old"},
+			newLines:      []string{"prefix", "new", "extra"},
+			wantFirst:     1,
+			wantLast:      2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			first, last := findChangedLineRange(tt.oldLines, tt.newLines)
+			assert.Equal(t, tt.wantFirst, first, "first changed index")
+			assert.Equal(t, tt.wantLast, last, "last changed index")
+		})
+	}
+}

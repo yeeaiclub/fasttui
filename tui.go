@@ -102,9 +102,10 @@ func (t *TUI) doRender() {
 	}
 	newLines := t.renderComponent(width, height)
 	row, col := extractCursorPosition(newLines, height)
-	newLines = applyLineRests(newLines)
 
 	widthChanged := t.previousWidth != 0 && t.previousWidth != width
+
+	newLines = applyLineRests(newLines)
 	fullRender := t.getFullRender(newLines, height, row, col, width)
 	if len(t.previousLines) == 0 && !widthChanged {
 		fullRender(false)
@@ -164,6 +165,25 @@ func (t *TUI) doRender() {
 		return
 	}
 
+	finalCursorRow := t.renderChangedLines(prevViewportTop, height, firstChanged, appendStart, hardwareCursorRow, viewportTop, computeLineDiff, lastChanged, newLines, width)
+
+	// Track cursor position for next render
+	// cursorRow tracks end of content (for viewport calculation)
+	// hardwareCursorRow tracks actual terminal cursor position (for movement)
+	t.cursorRow = max(0, len(newLines)-1)
+	t.hardwareCursorRow = finalCursorRow
+
+	// Track terminal's working area (grows but doesn't shrink unless cleared)
+	t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
+	t.previousViewportTop = max(0, t.maxLinesRendered-height)
+
+	// Position hardware cursor for IME
+	t.positionHardwareCursor(row, col, len(newLines))
+	t.previousLines = newLines
+	t.previousWidth = width
+}
+
+func (t *TUI) renderChangedLines(prevViewportTop int, height int, firstChanged int, appendStart bool, hardwareCursorRow int, viewportTop int, computeLineDiff func(targetRow int) int, lastChanged int, newLines []string, width int) int {
 	// Render from first changed line to end
 	// Build buffer with all updates wrapped in synchronized output
 	var buffer strings.Builder
@@ -258,21 +278,7 @@ func (t *TUI) doRender() {
 
 	// Write entire buffer at once
 	t.terminal.Write(buffer.String())
-
-	// Track cursor position for next render
-	// cursorRow tracks end of content (for viewport calculation)
-	// hardwareCursorRow tracks actual terminal cursor position (for movement)
-	t.cursorRow = max(0, len(newLines)-1)
-	t.hardwareCursorRow = finalCursorRow
-
-	// Track terminal's working area (grows but doesn't shrink unless cleared)
-	t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
-	t.previousViewportTop = max(0, t.maxLinesRendered-height)
-
-	// Position hardware cursor for IME
-	t.positionHardwareCursor(row, col, len(newLines))
-	t.previousLines = newLines
-	t.previousWidth = width
+	return finalCursorRow
 }
 
 func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, fullRender func(clear bool)) bool {
@@ -545,29 +551,7 @@ func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), f
 	t.RequestRender(false)
 
 	hide := func() {
-		index := -1
-		for i := range t.overlayStacks {
-			if t.overlayStacks[i].component == component {
-				index = i
-				break
-			}
-		}
-		if index != -1 {
-			preFocus := t.overlayStacks[index].preFocus
-			t.overlayStacks = append(t.overlayStacks[:index], t.overlayStacks[index+1:]...)
-			if t.focusedComponent == component {
-				topVisible := t.getTopmostVisibleOverlay()
-				if topVisible != nil {
-					t.SetFocus(topVisible.component)
-				} else {
-					t.SetFocus(preFocus)
-				}
-			}
-			if len(t.overlayStacks) == 0 {
-				t.terminal.HideCursor()
-			}
-			t.RequestRender(false)
-		}
+		t.hide(component)
 	}
 
 	setHidden := func(hidden bool) {
@@ -614,6 +598,32 @@ func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), f
 	}
 
 	return hide, setHidden, isHidden
+}
+
+func (t *TUI) hide(component Component) {
+	index := -1
+	for i := range t.overlayStacks {
+		if t.overlayStacks[i].component == component {
+			index = i
+			break
+		}
+	}
+	if index != -1 {
+		preFocus := t.overlayStacks[index].preFocus
+		t.overlayStacks = append(t.overlayStacks[:index], t.overlayStacks[index+1:]...)
+		if t.focusedComponent == component {
+			topVisible := t.getTopmostVisibleOverlay()
+			if topVisible != nil {
+				t.SetFocus(topVisible.component)
+			} else {
+				t.SetFocus(preFocus)
+			}
+		}
+		if len(t.overlayStacks) == 0 {
+			t.terminal.HideCursor()
+		}
+		t.RequestRender(false)
+	}
 }
 
 func (t *TUI) HideOverlay() {
@@ -772,6 +782,19 @@ func (t *TUI) compositeLineAt(baseLine string, overlayLine string, col int, over
 	afterPad := max(0, afterTarget-afterWidth)
 
 	// Compose result
+	result := t.composeOverlayLine(before, beforePad, overlay, overlayPad, after, afterPad)
+
+	// CRITICAL: Always verify and truncate to terminal width.
+	// This is the final safeguard against width overflow which would crash the TUI.
+	resultWidth := VisibleWidth(result)
+	if resultWidth <= termWidth {
+		return result
+	}
+	// Truncate with strict=true to ensure we don't exceed termWidth
+	return SliceByColumn(result, 0, termWidth, true)
+}
+
+func (t *TUI) composeOverlayLine(before string, beforePad int, overlay SliceResult, overlayPad int, after string, afterPad int) string {
 	var result strings.Builder
 	result.WriteString(before)
 	result.WriteString(strings.Repeat(" ", beforePad))
@@ -781,16 +804,7 @@ func (t *TUI) compositeLineAt(baseLine string, overlayLine string, col int, over
 	result.WriteString(SEGMENT_RESET)
 	result.WriteString(after)
 	result.WriteString(strings.Repeat(" ", afterPad))
-
-	// CRITICAL: Always verify and truncate to terminal width.
-	// This is the final safeguard against width overflow which would crash the TUI.
-	resultStr := result.String()
-	resultWidth := VisibleWidth(resultStr)
-	if resultWidth <= termWidth {
-		return resultStr
-	}
-	// Truncate with strict=true to ensure we don't exceed termWidth
-	return SliceByColumn(resultStr, 0, termWidth, true)
+	return result.String()
 }
 
 var CURSOR_MARKER = "\x1b_pi:c\x07"
