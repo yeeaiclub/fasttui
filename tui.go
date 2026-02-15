@@ -139,47 +139,12 @@ func (t *TUI) doRender() {
 	// All changes are in deleted lines (nothing to render, just clear)
 	if firstChanged >= len(newLines) {
 		if len(t.previousLines) > len(newLines) {
-			var buffer strings.Builder
-			buffer.WriteString("\x1b[?2026h")
-
-			// Move to end of new content (clamp to 0 for empty content)
 			targetRow := max(0, len(newLines)-1)
 			lineDiff := computeLineDiff(targetRow)
-			if lineDiff > 0 {
-				buffer.WriteString("\x1b[")
-				buffer.WriteString(strconv.Itoa(lineDiff))
-				buffer.WriteString("B")
-			} else if lineDiff < 0 {
-				buffer.WriteString("\x1b[")
-				buffer.WriteString(strconv.Itoa(-lineDiff))
-				buffer.WriteString("A")
-			}
-			buffer.WriteString("\r")
-
-			// Clear extra lines without scrolling
-			extraLines := len(t.previousLines) - len(newLines)
-			if extraLines > height {
-				fullRender(true)
+			extra := len(newLines) - len(t.previousLines)
+			if t.clearExtraLines(lineDiff, extra, height, fullRender) {
 				return
 			}
-
-			if extraLines > 0 {
-				buffer.WriteString("\x1b[1B")
-			}
-			for i := range extraLines {
-				buffer.WriteString("\r\x1b[2K")
-				if i < extraLines-1 {
-					buffer.WriteString("\x1b[1B")
-				}
-			}
-			if extraLines > 0 {
-				buffer.WriteString("\x1b[")
-				buffer.WriteString(strconv.Itoa(extraLines))
-				buffer.WriteString("A")
-			}
-
-			buffer.WriteString("\x1b[?2026l")
-			t.terminal.Write(buffer.String())
 			t.cursorRow = targetRow
 			t.hardwareCursorRow = targetRow
 		}
@@ -308,6 +273,48 @@ func (t *TUI) doRender() {
 	t.positionHardwareCursor(row, col, len(newLines))
 	t.previousLines = newLines
 	t.previousWidth = width
+}
+
+func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, fullRender func(clear bool)) bool {
+	var buffer strings.Builder
+	buffer.WriteString("\x1b[?2026h")
+
+	// Move to end of new content (clamp to 0 for empty content)
+	if cursorOffset > 0 {
+		buffer.WriteString("\x1b[")
+		buffer.WriteString(strconv.Itoa(cursorOffset))
+		buffer.WriteString("B")
+	} else if cursorOffset < 0 {
+		buffer.WriteString("\x1b[")
+		buffer.WriteString(strconv.Itoa(-cursorOffset))
+		buffer.WriteString("A")
+	}
+	buffer.WriteString("\r")
+
+	// Clear extra lines without scrolling
+	if extraLines > height {
+		fullRender(true)
+		return true
+	}
+
+	if extraLines > 0 {
+		buffer.WriteString("\x1b[1B")
+	}
+	for i := range extraLines {
+		buffer.WriteString("\r\x1b[2K")
+		if i < extraLines-1 {
+			buffer.WriteString("\x1b[1B")
+		}
+	}
+	if extraLines > 0 {
+		buffer.WriteString("\x1b[")
+		buffer.WriteString(strconv.Itoa(extraLines))
+		buffer.WriteString("A")
+	}
+
+	buffer.WriteString("\x1b[?2026l")
+	t.terminal.Write(buffer.String())
+	return false
 }
 
 func (t *TUI) renderComponent(width int, height int) []string {
