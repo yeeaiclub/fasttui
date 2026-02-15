@@ -65,31 +65,29 @@ func (app *ChatApp) addLoader() *components.Loader {
 }
 
 func (app *ChatApp) simulateResponse(loader *components.Loader) {
-	go func() {
-		time.Sleep(1 * time.Second)
+	time.Sleep(1 * time.Second)
 
-		app.tui.RemoveChild(loader)
-		loader.Stop()
+	app.tui.RemoveChild(loader)
+	loader.Stop()
 
-		responses := []string{
-			"That's interesting! Tell me more.",
-			"I see what you mean.",
-			"Fascinating perspective!",
-			"Could you elaborate on that?",
-			"That makes sense to me.",
-			"I hadn't thought of it that way.",
-			"Great point!",
-			"Thanks for sharing that.",
-		}
-		randomResponse := responses[rand.Intn(len(responses))]
+	responses := []string{
+		"That's interesting! Tell me more.",
+		"I see what you mean.",
+		"Fascinating perspective!",
+		"Could you elaborate on that?",
+		"That makes sense to me.",
+		"I hadn't thought of it that way.",
+		"Great point!",
+		"Thanks for sharing that.",
+	}
+	randomResponse := responses[rand.Intn(len(responses))]
 
-		botMessage := components.NewMarkdown(randomResponse, 1, 1, app.theme, nil)
-		children := app.tui.GetChildren()
-		app.tui.InsertChildAt(len(children)-1, botMessage)
+	botMessage := components.NewMarkdown(randomResponse, 1, 1, app.theme, nil)
+	children := app.tui.GetChildren()
+	app.tui.InsertChildAt(len(children)-1, botMessage)
 
-		app.isResponding = false
-		app.tui.RequestRender(false)
-	}()
+	app.isResponding = false
+	app.tui.RequestRender(false)
 }
 
 func (app *ChatApp) handleSubmit(value string) {
