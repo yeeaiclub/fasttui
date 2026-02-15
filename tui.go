@@ -117,7 +117,7 @@ func (t *TUI) doRender() {
 	}
 
 	// Find first and last changed lines
-	firstChanged, lastChanged := t.findChangedLineRange(newLines)
+	firstChanged, lastChanged := findChangedLineRange(t.previousLines, newLines)
 
 	appendedLines := len(newLines) > len(t.previousLines)
 	if appendedLines {
@@ -660,30 +660,6 @@ func (t *TUI) getTopmostVisibleOverlay() *Overlay {
 		}
 	}
 	return nil
-}
-
-func (t *TUI) findChangedLineRange(newLines []string) (int, int) {
-	firstChanged := -1
-	lastChanged := -1
-	maxLines := max(len(newLines), len(t.previousLines))
-	for i := range maxLines {
-		oldLine := ""
-		newLine := ""
-		if i < len(t.previousLines) {
-			oldLine = t.previousLines[i]
-		}
-		if i < len(newLines) {
-			newLine = newLines[i]
-		}
-
-		if oldLine != newLine {
-			if firstChanged == -1 {
-				firstChanged = i
-			}
-			lastChanged = i
-		}
-	}
-	return firstChanged, lastChanged
 }
 
 func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {

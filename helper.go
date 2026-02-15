@@ -158,6 +158,30 @@ func buildWidthExceedErrorMsg(lineIndex int, lineWidth int, termWidth int, crash
 	return errorMsg.String()
 }
 
+func findChangedLineRange(oldLines, newLines []string) (int, int) {
+	firstChanged := -1
+	lastChanged := -1
+	maxLines := max(len(newLines), len(oldLines))
+	for i := range maxLines {
+		oldLine := ""
+		newLine := ""
+		if i < len(oldLines) {
+			oldLine = oldLines[i]
+		}
+		if i < len(newLines) {
+			newLine = newLines[i]
+		}
+
+		if oldLine != newLine {
+			if firstChanged == -1 {
+				firstChanged = i
+			}
+			lastChanged = i
+		}
+	}
+	return firstChanged, lastChanged
+}
+
 func writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
 	renderEnd, cursorRow, cursorCol, height int, tCursorRow int, newLines, previousLines []string) {
 	debugDir := "/tmp/tui"
