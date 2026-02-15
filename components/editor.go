@@ -299,7 +299,7 @@ func (e *Editor) Render(width int) []string {
 	rightPadding := leftPadding
 
 	if e.scrollOffset > 0 {
-		result = append(result, e.renderTopBorder(width, e.scrollOffset))
+		result = append(result, e.renderBorder("↑", width, e.scrollOffset))
 	} else {
 		result = append(result, strings.Repeat(horizontal, width))
 	}
@@ -307,7 +307,7 @@ func (e *Editor) Render(width int) []string {
 	for _, line := range visibleLines {
 		displayText := line.Text
 		lineVisibleWith := fasttui.VisibleWidth(line.Text)
-		cursorInpadding := false
+		cursorInPadding := false
 		if line.HasCursor {
 			// Ensure CursorPos is within bounds
 			cursorPos := min(line.CursorPos, len(displayText))
@@ -337,13 +337,13 @@ func (e *Editor) Render(width int) []string {
 				displayText = before + marker + cursor
 				lineVisibleWith = lineVisibleWith + 1
 				if lineVisibleWith > contentWidth && paddingX > 0 {
-					cursorInpadding = true
+					cursorInPadding = true
 				}
 			}
 		}
 		padding := strings.Repeat(" ", max(0, contentWidth-lineVisibleWith))
 		var lineRenderPadding string
-		if cursorInpadding {
+		if cursorInPadding {
 			lineRenderPadding = string(rightPadding[1])
 		} else {
 			lineRenderPadding = rightPadding
@@ -354,7 +354,7 @@ func (e *Editor) Render(width int) []string {
 
 	linesBelow := len(layoutLines) - (e.scrollOffset + len(visibleLines))
 	if linesBelow > 0 {
-		e.renderButtonBorder(width, linesBelow)
+		e.renderBorder("↓", width, linesBelow)
 		result = append(result, strings.Repeat(horizontal, width))
 	} else {
 		result = append(result, strings.Repeat(horizontal, width))
@@ -362,14 +362,8 @@ func (e *Editor) Render(width int) []string {
 	return result
 }
 
-func (e *Editor) renderTopBorder(width int, scrollOffset int) string {
-	indicator := fmt.Sprintf("─── ↑ %d more ", scrollOffset)
-	remaining := max(width-fasttui.VisibleWidth(indicator), 0)
-	return indicator + strings.Repeat("─", remaining)
-}
-
-func (e *Editor) renderButtonBorder(width int, scrollOffset int) string {
-	indicator := fmt.Sprintf("─── ↓ %d more ", scrollOffset)
+func (e *Editor) renderBorder(style string, width int, scrollOffset int) string {
+	indicator := fmt.Sprintf("─── %s %d more", style, scrollOffset)
 	remaining := max(width-fasttui.VisibleWidth(indicator), 0)
 	return indicator + strings.Repeat("─", remaining)
 }
