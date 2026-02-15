@@ -423,7 +423,7 @@ func WrapTextWithAnsi(text string, width int) []string {
 		return []string{""}
 	}
 
-	inputLines := splitLines(text)
+	inputLines := strings.Split(text, "\n")
 	var result []string
 	tracker := NewAnsiCodeTracker()
 
@@ -461,7 +461,7 @@ func wrapSingleLine(line string, width int) []string {
 
 	for _, token := range tokens {
 		tokenVisibleLength := VisibleWidth(token)
-		isWhitespace := trimSpace(token) == ""
+		isWhitespace := strings.TrimSpace(token) == ""
 
 		if tokenVisibleLength > width && !isWhitespace {
 			if currentLine != "" {
@@ -817,10 +817,7 @@ func ExtractSegments(line string, beforeEnd int, afterStart int, afterLen int, s
 
 func ApplyBackgroundToLine(line string, width int, bgFn func(string) string) string {
 	visibleLen := VisibleWidth(line)
-	paddingNeeded := width - visibleLen
-	if paddingNeeded < 0 {
-		paddingNeeded = 0
-	}
+	paddingNeeded := max(width-visibleLen, 0)
 	padding := repeatSpaces(paddingNeeded)
 
 	withPadding := line + padding
@@ -849,14 +846,6 @@ func IsPunctuationChar(char string) bool {
 	return false
 }
 
-func splitLines(s string) []string {
-	return strings.Split(s, "\n")
-}
-
-func trimSpace(s string) string {
-	return strings.TrimSpace(s)
-}
-
 func trimRight(s string) string {
 	return strings.TrimRight(s, " ")
 }
@@ -866,16 +855,4 @@ func repeatSpaces(count int) string {
 		return ""
 	}
 	return strings.Repeat(" ", count)
-}
-
-func containsString(s, substr string) bool {
-	return strings.Contains(s, substr)
-}
-
-func findSubstring(s, substr string) int {
-	return strings.Index(s, substr)
-}
-
-func replaceAllString(s, pattern, replacement string) string {
-	return strings.ReplaceAll(s, pattern, replacement)
 }

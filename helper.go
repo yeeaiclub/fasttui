@@ -64,6 +64,7 @@ func parseMargin(margin any) (marginTop, marginRight, marginBottom, marginLeft i
 // Returns (-1, -1) if no cursor marker is found. The search starts from the bottom
 // of the visible viewport and goes upward.
 func extractCursorPosition(lines []string, height int) (int, int) {
+	// Start from the bottom of the visible viewport
 	viewportTop := max(0, len(lines)-height)
 	for row := len(lines) - 1; row >= viewportTop; row-- {
 		line := lines[row]
@@ -155,4 +156,79 @@ func buildWidthExceedErrorMsg(lineIndex int, lineWidth int, termWidth int, crash
 	errorMsg.WriteString("Debug log written to: ")
 	errorMsg.WriteString(crashLogPath)
 	return errorMsg.String()
+}
+
+func findChangedLineRange(oldLines, newLines []string) (int, int) {
+	firstChanged := -1
+	lastChanged := -1
+	maxLines := max(len(newLines), len(oldLines))
+	for i := range maxLines {
+		oldLine := ""
+		newLine := ""
+		if i < len(oldLines) {
+			oldLine = oldLines[i]
+		}
+		if i < len(newLines) {
+			newLine = newLines[i]
+		}
+
+		if oldLine != newLine {
+			if firstChanged == -1 {
+				firstChanged = i
+			}
+			lastChanged = i
+		}
+	}
+	return firstChanged, lastChanged
+}
+
+func writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
+	renderEnd, cursorRow, cursorCol, height int, tCursorRow int, newLines, previousLines []string) {
+	debugDir := "/tmp/tui"
+	os.MkdirAll(debugDir, 0755)
+
+	timestamp := time.Now().UnixNano() / int64(time.Millisecond)
+	debugPath := filepath.Join(debugDir, "render-"+strconv.FormatInt(timestamp, 10)+".log")
+
+	var debugData strings.Builder
+	debugData.WriteString("firstChanged: ")
+	debugData.WriteString(strconv.Itoa(firstChanged))
+	debugData.WriteString("\nviewportTop: ")
+	debugData.WriteString(strconv.Itoa(viewportTop))
+	debugData.WriteString("\ncursorRow: ")
+	debugData.WriteString(strconv.Itoa(tCursorRow))
+	debugData.WriteString("\nheight: ")
+	debugData.WriteString(strconv.Itoa(height))
+	debugData.WriteString("\nhardwareCursorRow: ")
+	debugData.WriteString(strconv.Itoa(hardwareCursorRow))
+	debugData.WriteString("\nrenderEnd: ")
+	debugData.WriteString(strconv.Itoa(renderEnd))
+	debugData.WriteString("\nfinalCursorRow: ")
+	debugData.WriteString(strconv.Itoa(finalCursorRow))
+	debugData.WriteString("\ncursorPos: row=")
+	debugData.WriteString(strconv.Itoa(cursorRow))
+	debugData.WriteString(" col=")
+	debugData.WriteString(strconv.Itoa(cursorCol))
+	debugData.WriteString("\nnewLines.length: ")
+	debugData.WriteString(strconv.Itoa(len(newLines)))
+	debugData.WriteString("\npreviousLines.length: ")
+	debugData.WriteString(strconv.Itoa(len(previousLines)))
+	debugData.WriteString("\n\n=== newLines ===\n")
+	for i, line := range newLines {
+		debugData.WriteString("[")
+		debugData.WriteString(strconv.Itoa(i))
+		debugData.WriteString("] ")
+		debugData.WriteString(line)
+		debugData.WriteString("\n")
+	}
+	debugData.WriteString("\n=== previousLines ===\n")
+	for i, line := range previousLines {
+		debugData.WriteString("[")
+		debugData.WriteString(strconv.Itoa(i))
+		debugData.WriteString("] ")
+		debugData.WriteString(line)
+		debugData.WriteString("\n")
+	}
+
+	os.WriteFile(debugPath, []byte(debugData.String()), 0644)
 }

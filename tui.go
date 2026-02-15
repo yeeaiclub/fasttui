@@ -2,12 +2,9 @@ package fasttui
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/yeeaiclub/fasttui/keys"
 )
@@ -103,18 +100,13 @@ func (t *TUI) doRender() {
 		ct := targetRow - viewportTop
 		return ct - cs
 	}
-	// render all components in container
-	newLines := t.Render(width)
-	if len(t.overlayStacks) > 0 {
-		newLines = t.compositeOverlays(newLines, width, height)
-	}
-
+	newLines := t.renderComponent(width, height)
 	row, col := extractCursorPosition(newLines, height)
-	newLines = applyLineRests(newLines)
+
 	widthChanged := t.previousWidth != 0 && t.previousWidth != width
 
-	fullRender := t.fullRender(newLines, height, row, col, width)
-
+	newLines = applyLineRests(newLines)
+	fullRender := t.getFullRender(newLines, height, row, col, width)
 	if len(t.previousLines) == 0 && !widthChanged {
 		fullRender(false)
 		return
@@ -126,7 +118,7 @@ func (t *TUI) doRender() {
 	}
 
 	// Find first and last changed lines
-	firstChanged, lastChanged := t.findChangedLineRange(newLines)
+	firstChanged, lastChanged := findChangedLineRange(t.previousLines, newLines)
 
 	appendedLines := len(newLines) > len(t.previousLines)
 	if appendedLines {
@@ -148,47 +140,12 @@ func (t *TUI) doRender() {
 	// All changes are in deleted lines (nothing to render, just clear)
 	if firstChanged >= len(newLines) {
 		if len(t.previousLines) > len(newLines) {
-			var buffer strings.Builder
-			buffer.WriteString("\x1b[?2026h")
-
-			// Move to end of new content (clamp to 0 for empty content)
 			targetRow := max(0, len(newLines)-1)
 			lineDiff := computeLineDiff(targetRow)
-			if lineDiff > 0 {
-				buffer.WriteString("\x1b[")
-				buffer.WriteString(strconv.Itoa(lineDiff))
-				buffer.WriteString("B")
-			} else if lineDiff < 0 {
-				buffer.WriteString("\x1b[")
-				buffer.WriteString(strconv.Itoa(-lineDiff))
-				buffer.WriteString("A")
-			}
-			buffer.WriteString("\r")
-
-			// Clear extra lines without scrolling
-			extraLines := len(t.previousLines) - len(newLines)
-			if extraLines > height {
-				fullRender(true)
+			extra := len(newLines) - len(t.previousLines)
+			if t.clearExtraLines(lineDiff, extra, height, fullRender) {
 				return
 			}
-
-			if extraLines > 0 {
-				buffer.WriteString("\x1b[1B")
-			}
-			for i := range extraLines {
-				buffer.WriteString("\r\x1b[2K")
-				if i < extraLines-1 {
-					buffer.WriteString("\x1b[1B")
-				}
-			}
-			if extraLines > 0 {
-				buffer.WriteString("\x1b[")
-				buffer.WriteString(strconv.Itoa(extraLines))
-				buffer.WriteString("A")
-			}
-
-			buffer.WriteString("\x1b[?2026l")
-			t.terminal.Write(buffer.String())
 			t.cursorRow = targetRow
 			t.hardwareCursorRow = targetRow
 		}
@@ -208,6 +165,25 @@ func (t *TUI) doRender() {
 		return
 	}
 
+	finalCursorRow := t.renderChangedLines(prevViewportTop, height, firstChanged, appendStart, hardwareCursorRow, viewportTop, computeLineDiff, lastChanged, newLines, width)
+
+	// Track cursor position for next render
+	// cursorRow tracks end of content (for viewport calculation)
+	// hardwareCursorRow tracks actual terminal cursor position (for movement)
+	t.cursorRow = max(0, len(newLines)-1)
+	t.hardwareCursorRow = finalCursorRow
+
+	// Track terminal's working area (grows but doesn't shrink unless cleared)
+	t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
+	t.previousViewportTop = max(0, t.maxLinesRendered-height)
+
+	// Position hardware cursor for IME
+	t.positionHardwareCursor(row, col, len(newLines))
+	t.previousLines = newLines
+	t.previousWidth = width
+}
+
+func (t *TUI) renderChangedLines(prevViewportTop int, height int, firstChanged int, appendStart bool, hardwareCursorRow int, viewportTop int, computeLineDiff func(targetRow int) int, lastChanged int, newLines []string, width int) int {
 	// Render from first changed line to end
 	// Build buffer with all updates wrapped in synchronized output
 	var buffer strings.Builder
@@ -300,32 +276,63 @@ func (t *TUI) doRender() {
 
 	buffer.WriteString("\x1b[?2026l") // End synchronized output
 
-	// Debug logging if enabled
-	// if os.Getenv("PI_TUI_DEBUG") == "1" {
-	// 	t.writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
-	// 		renderEnd, row, col, height, newLines)
-	// }
-
 	// Write entire buffer at once
 	t.terminal.Write(buffer.String())
-
-	// Track cursor position for next render
-	// cursorRow tracks end of content (for viewport calculation)
-	// hardwareCursorRow tracks actual terminal cursor position (for movement)
-	t.cursorRow = max(0, len(newLines)-1)
-	t.hardwareCursorRow = finalCursorRow
-
-	// Track terminal's working area (grows but doesn't shrink unless cleared)
-	t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
-	t.previousViewportTop = max(0, t.maxLinesRendered-height)
-
-	// Position hardware cursor for IME
-	t.positionHardwareCursor(row, col, len(newLines))
-	t.previousLines = newLines
-	t.previousWidth = width
+	return finalCursorRow
 }
 
-func (t *TUI) fullRender(newLines []string, height int, row int, col int, width int) func(clear bool) {
+func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, fullRender func(clear bool)) bool {
+	var buffer strings.Builder
+	buffer.WriteString("\x1b[?2026h")
+
+	// Move to end of new content (clamp to 0 for empty content)
+	if cursorOffset > 0 {
+		buffer.WriteString("\x1b[")
+		buffer.WriteString(strconv.Itoa(cursorOffset))
+		buffer.WriteString("B")
+	} else if cursorOffset < 0 {
+		buffer.WriteString("\x1b[")
+		buffer.WriteString(strconv.Itoa(-cursorOffset))
+		buffer.WriteString("A")
+	}
+	buffer.WriteString("\r")
+
+	// Clear extra lines without scrolling
+	if extraLines > height {
+		fullRender(true)
+		return true
+	}
+
+	if extraLines > 0 {
+		buffer.WriteString("\x1b[1B")
+	}
+	for i := range extraLines {
+		buffer.WriteString("\r\x1b[2K")
+		if i < extraLines-1 {
+			buffer.WriteString("\x1b[1B")
+		}
+	}
+	if extraLines > 0 {
+		buffer.WriteString("\x1b[")
+		buffer.WriteString(strconv.Itoa(extraLines))
+		buffer.WriteString("A")
+	}
+
+	buffer.WriteString("\x1b[?2026l")
+	t.terminal.Write(buffer.String())
+	return false
+}
+
+func (t *TUI) renderComponent(width int, height int) []string {
+	// render all components in container
+	newLines := t.Render(width)
+	if len(t.overlayStacks) > 0 {
+		newLines = t.compositeOverlays(newLines, width, height)
+	}
+	return newLines
+}
+
+func (t *TUI) getFullRender(newLines []string, height int, row int, col int, width int) func(clear bool) {
 	fullRender := func(clear bool) {
 		t.fullRedrawCount++
 		var buffer strings.Builder
@@ -458,7 +465,7 @@ func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, ter
 		if anchor == "" {
 			anchor = AnchorCenter
 		}
-		row = t.resolveAnchorRow(anchor, effectiveHeight, availHeight, marginTop)
+		row = anchor.getRow(effectiveHeight, availHeight, marginTop)
 	}
 
 	if options.Col != 0 {
@@ -468,7 +475,7 @@ func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, ter
 		if anchor == "" {
 			anchor = AnchorCenter
 		}
-		col = t.resolveAnchorCol(anchor, width, availWidth, marginLeft)
+		col = anchor.getCol(width, availWidth, marginLeft)
 	}
 
 	if options.OffsetY != 0 {
@@ -544,29 +551,7 @@ func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), f
 	t.RequestRender(false)
 
 	hide := func() {
-		index := -1
-		for i := range t.overlayStacks {
-			if t.overlayStacks[i].component == component {
-				index = i
-				break
-			}
-		}
-		if index != -1 {
-			preFocus := t.overlayStacks[index].preFocus
-			t.overlayStacks = append(t.overlayStacks[:index], t.overlayStacks[index+1:]...)
-			if t.focusedComponent == component {
-				topVisible := t.getTopmostVisibleOverlay()
-				if topVisible != nil {
-					t.SetFocus(topVisible.component)
-				} else {
-					t.SetFocus(preFocus)
-				}
-			}
-			if len(t.overlayStacks) == 0 {
-				t.terminal.HideCursor()
-			}
-			t.RequestRender(false)
-		}
+		t.hide(component)
 	}
 
 	setHidden := func(hidden bool) {
@@ -613,6 +598,32 @@ func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), f
 	}
 
 	return hide, setHidden, isHidden
+}
+
+func (t *TUI) hide(component Component) {
+	index := -1
+	for i := range t.overlayStacks {
+		if t.overlayStacks[i].component == component {
+			index = i
+			break
+		}
+	}
+	if index != -1 {
+		preFocus := t.overlayStacks[index].preFocus
+		t.overlayStacks = append(t.overlayStacks[:index], t.overlayStacks[index+1:]...)
+		if t.focusedComponent == component {
+			topVisible := t.getTopmostVisibleOverlay()
+			if topVisible != nil {
+				t.SetFocus(topVisible.component)
+			} else {
+				t.SetFocus(preFocus)
+			}
+		}
+		if len(t.overlayStacks) == 0 {
+			t.terminal.HideCursor()
+		}
+		t.RequestRender(false)
+	}
 }
 
 func (t *TUI) HideOverlay() {
@@ -666,81 +677,6 @@ func (t *TUI) getTopmostVisibleOverlay() *Overlay {
 		}
 	}
 	return nil
-}
-
-func (t *TUI) findChangedLineRange(newLines []string) (int, int) {
-	firstChanged := -1
-	lastChanged := -1
-	maxLines := max(len(newLines), len(t.previousLines))
-	for i := range maxLines {
-		oldLine := ""
-		newLine := ""
-		if i < len(t.previousLines) {
-			oldLine = t.previousLines[i]
-		}
-		if i < len(newLines) {
-			newLine = newLines[i]
-		}
-
-		if oldLine != newLine {
-			if firstChanged == -1 {
-				firstChanged = i
-			}
-			lastChanged = i
-		}
-	}
-	return firstChanged, lastChanged
-}
-
-func (t *TUI) writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
-	renderEnd, cursorRow, cursorCol, height int, newLines []string) {
-	debugDir := "/tmp/tui"
-	os.MkdirAll(debugDir, 0755)
-
-	timestamp := time.Now().UnixNano() / int64(time.Millisecond)
-	debugPath := filepath.Join(debugDir, "render-"+strconv.FormatInt(timestamp, 10)+".log")
-
-	var debugData strings.Builder
-	debugData.WriteString("firstChanged: ")
-	debugData.WriteString(strconv.Itoa(firstChanged))
-	debugData.WriteString("\nviewportTop: ")
-	debugData.WriteString(strconv.Itoa(viewportTop))
-	debugData.WriteString("\ncursorRow: ")
-	debugData.WriteString(strconv.Itoa(t.cursorRow))
-	debugData.WriteString("\nheight: ")
-	debugData.WriteString(strconv.Itoa(height))
-	debugData.WriteString("\nhardwareCursorRow: ")
-	debugData.WriteString(strconv.Itoa(hardwareCursorRow))
-	debugData.WriteString("\nrenderEnd: ")
-	debugData.WriteString(strconv.Itoa(renderEnd))
-	debugData.WriteString("\nfinalCursorRow: ")
-	debugData.WriteString(strconv.Itoa(finalCursorRow))
-	debugData.WriteString("\ncursorPos: row=")
-	debugData.WriteString(strconv.Itoa(cursorRow))
-	debugData.WriteString(" col=")
-	debugData.WriteString(strconv.Itoa(cursorCol))
-	debugData.WriteString("\nnewLines.length: ")
-	debugData.WriteString(strconv.Itoa(len(newLines)))
-	debugData.WriteString("\npreviousLines.length: ")
-	debugData.WriteString(strconv.Itoa(len(t.previousLines)))
-	debugData.WriteString("\n\n=== newLines ===\n")
-	for i, line := range newLines {
-		debugData.WriteString("[")
-		debugData.WriteString(strconv.Itoa(i))
-		debugData.WriteString("] ")
-		debugData.WriteString(line)
-		debugData.WriteString("\n")
-	}
-	debugData.WriteString("\n=== previousLines ===\n")
-	for i, line := range t.previousLines {
-		debugData.WriteString("[")
-		debugData.WriteString(strconv.Itoa(i))
-		debugData.WriteString("] ")
-		debugData.WriteString(line)
-		debugData.WriteString("\n")
-	}
-
-	os.WriteFile(debugPath, []byte(debugData.String()), 0644)
 }
 
 func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
@@ -846,6 +782,19 @@ func (t *TUI) compositeLineAt(baseLine string, overlayLine string, col int, over
 	afterPad := max(0, afterTarget-afterWidth)
 
 	// Compose result
+	result := t.composeOverlayLine(before, beforePad, overlay, overlayPad, after, afterPad)
+
+	// CRITICAL: Always verify and truncate to terminal width.
+	// This is the final safeguard against width overflow which would crash the TUI.
+	resultWidth := VisibleWidth(result)
+	if resultWidth <= termWidth {
+		return result
+	}
+	// Truncate with strict=true to ensure we don't exceed termWidth
+	return SliceByColumn(result, 0, termWidth, true)
+}
+
+func (t *TUI) composeOverlayLine(before string, beforePad int, overlay SliceResult, overlayPad int, after string, afterPad int) string {
 	var result strings.Builder
 	result.WriteString(before)
 	result.WriteString(strings.Repeat(" ", beforePad))
@@ -855,16 +804,7 @@ func (t *TUI) compositeLineAt(baseLine string, overlayLine string, col int, over
 	result.WriteString(SEGMENT_RESET)
 	result.WriteString(after)
 	result.WriteString(strings.Repeat(" ", afterPad))
-
-	// CRITICAL: Always verify and truncate to terminal width.
-	// This is the final safeguard against width overflow which would crash the TUI.
-	resultStr := result.String()
-	resultWidth := VisibleWidth(resultStr)
-	if resultWidth <= termWidth {
-		return resultStr
-	}
-	// Truncate with strict=true to ensure we don't exceed termWidth
-	return SliceByColumn(resultStr, 0, termWidth, true)
+	return result.String()
 }
 
 var CURSOR_MARKER = "\x1b_pi:c\x07"
@@ -892,32 +832,6 @@ func (t *TUI) QueryCellSize() {
 	}
 	t.cellSizeQueryPending = true
 	t.terminal.Write("\x1b[16t")
-}
-
-func (t *TUI) resolveAnchorRow(anchor OverlayAnchor, height int, availHeight int, marginTop int) int {
-	switch anchor {
-	case AnchorTopLeft, AnchorTopCenter, AnchorTopRight:
-		return marginTop
-	case AnchorBottomLeft, AnchorBottomCenter, AnchorBottomRight:
-		return marginTop + max(0, availHeight-height)
-	case AnchorLeftCenter, AnchorRightCenter, AnchorCenter:
-		return marginTop + max(0, availHeight-height)/2
-	default:
-		return marginTop
-	}
-}
-
-func (t *TUI) resolveAnchorCol(anchor OverlayAnchor, width int, availWidth int, marginLeft int) int {
-	switch anchor {
-	case AnchorTopLeft, AnchorBottomLeft, AnchorLeftCenter:
-		return marginLeft
-	case AnchorTopRight, AnchorBottomRight, AnchorRightCenter:
-		return marginLeft + max(0, availWidth-width)
-	case AnchorTopCenter, AnchorBottomCenter, AnchorCenter:
-		return marginLeft + max(0, availWidth-width)/2
-	default:
-		return marginLeft
-	}
 }
 
 func (t *TUI) GetFullRedraws() int {
