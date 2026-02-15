@@ -1,6 +1,7 @@
 package fasttui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -263,50 +264,11 @@ func (t *TUI) doRender() {
 
 		line := newLines[i]
 		if !containsImage(line) && VisibleWidth(line) > width {
-			// Log all lines to crash file for debugging
-			crashLogPath := t.getCrashLogPath()
-			var crashData strings.Builder
-			crashData.WriteString("Crash at ")
-			crashData.WriteString(time.Now().Format(time.RFC3339))
-			crashData.WriteString("\n")
-			crashData.WriteString("Terminal width: ")
-			crashData.WriteString(strconv.Itoa(width))
-			crashData.WriteString("\n")
-			crashData.WriteString("Line ")
-			crashData.WriteString(strconv.Itoa(i))
-			crashData.WriteString(" visible width: ")
-			crashData.WriteString(strconv.Itoa(VisibleWidth(line)))
-			crashData.WriteString("\n\n")
-			crashData.WriteString("=== All rendered lines ===\n")
-			for idx, l := range newLines {
-				crashData.WriteString("[")
-				crashData.WriteString(strconv.Itoa(idx))
-				crashData.WriteString("] (w=")
-				crashData.WriteString(strconv.Itoa(VisibleWidth(l)))
-				crashData.WriteString(") ")
-				crashData.WriteString(l)
-				crashData.WriteString("\n")
-			}
+			logCrashInfo(width, i, line, newLines)
+			crashLogPath := getCrashLogPath()
 
-			t.writeCrashLog(crashLogPath, crashData.String())
-
-			// Clean up terminal state before panicking
 			t.Stop()
-
-			var errorMsg strings.Builder
-			errorMsg.WriteString("Rendered line ")
-			errorMsg.WriteString(strconv.Itoa(i))
-			errorMsg.WriteString(" exceeds terminal width (")
-			errorMsg.WriteString(strconv.Itoa(VisibleWidth(line)))
-			errorMsg.WriteString(" > ")
-			errorMsg.WriteString(strconv.Itoa(width))
-			errorMsg.WriteString(").\n\n")
-			errorMsg.WriteString("This is likely caused by a custom TUI component not truncating its output.\n")
-			errorMsg.WriteString("Use VisibleWidth() to measure and truncate lines.\n\n")
-			errorMsg.WriteString("Debug log written to: ")
-			errorMsg.WriteString(crashLogPath)
-
-			panic(errorMsg.String())
+			panic(buildWidthExceedErrorMsg(i, VisibleWidth(line), width, crashLogPath))
 		}
 		buffer.WriteString(line)
 	}
@@ -909,16 +871,94 @@ var CURSOR_MARKER = "\x1b_pi:c\x07"
 
 var SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
 
-func (t *TUI) getCrashLogPath() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = "."
+func (t *TUI) SetShowHardwareCursor(enabled bool) {
+	if t.showHardwareCursor == enabled {
+		return
 	}
-	return filepath.Join(homeDir, ".panda", "panda-crash.log")
+	t.showHardwareCursor = enabled
+	if !enabled {
+		t.terminal.HideCursor()
+	}
+	t.RequestRender(false)
 }
 
-func (t *TUI) writeCrashLog(path string, data string) {
-	dir := filepath.Dir(path)
-	os.MkdirAll(dir, 0755)
-	os.WriteFile(path, []byte(data), 0644)
+func (t *TUI) SetClearOnShrink(enabled bool) {
+	t.clearOnShrink = enabled
+}
+
+func (t *TUI) QueryCellSize() {
+	if !t.terminal.IsKittyProtocolActive() {
+		return
+	}
+	t.cellSizeQueryPending = true
+	t.terminal.Write("\x1b[16t")
+}
+
+func (t *TUI) resolveAnchorRow(anchor OverlayAnchor, height int, availHeight int, marginTop int) int {
+	switch anchor {
+	case AnchorTopLeft, AnchorTopCenter, AnchorTopRight:
+		return marginTop
+	case AnchorBottomLeft, AnchorBottomCenter, AnchorBottomRight:
+		return marginTop + max(0, availHeight-height)
+	case AnchorLeftCenter, AnchorRightCenter, AnchorCenter:
+		return marginTop + max(0, availHeight-height)/2
+	default:
+		return marginTop
+	}
+}
+
+func (t *TUI) resolveAnchorCol(anchor OverlayAnchor, width int, availWidth int, marginLeft int) int {
+	switch anchor {
+	case AnchorTopLeft, AnchorBottomLeft, AnchorLeftCenter:
+		return marginLeft
+	case AnchorTopRight, AnchorBottomRight, AnchorRightCenter:
+		return marginLeft + max(0, availWidth-width)
+	case AnchorTopCenter, AnchorBottomCenter, AnchorCenter:
+		return marginLeft + max(0, availWidth-width)/2
+	default:
+		return marginLeft
+	}
+}
+
+func (t *TUI) GetFullRedraws() int {
+	return t.fullRedrawCount
+}
+
+func (t *TUI) GetShowHardwareCursor() bool {
+	return t.showHardwareCursor
+}
+
+func (t *TUI) positionHardwareCursor(row int, col int, totalLines int) {
+	// Check if no cursor position was found (row == -1, col == -1)
+	if (row < 0 || col < 0) || totalLines <= 0 {
+		t.terminal.HideCursor()
+		return
+	}
+
+	targetRow := max(0, min(row, totalLines-1))
+	targetCol := max(0, col)
+
+	rowDelta := targetRow - t.hardwareCursorRow
+	var builder strings.Builder
+
+	if rowDelta > 0 {
+		// move down
+		builder.WriteString(fmt.Sprintf("\x1b[%dB", rowDelta))
+	} else if rowDelta < 0 {
+		// move up
+		builder.WriteString(fmt.Sprintf("\x1b[%dA", -rowDelta))
+	}
+
+	builder.WriteString(fmt.Sprintf("\x1b[%dG", targetCol+1))
+	if builder.Len() > 0 {
+		t.terminal.Write(builder.String())
+	}
+
+	t.hardwareCursorRow = targetRow
+
+	if t.showHardwareCursor {
+		t.terminal.ShowCursor()
+	} else {
+		t.terminal.HideCursor()
+	}
 }
