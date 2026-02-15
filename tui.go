@@ -2,12 +2,9 @@ package fasttui
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/yeeaiclub/fasttui/keys"
 )
@@ -302,8 +299,8 @@ func (t *TUI) doRender() {
 
 	// Debug logging if enabled
 	// if os.Getenv("PI_TUI_DEBUG") == "1" {
-	// 	t.writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
-	// 		renderEnd, row, col, height, newLines)
+	// 	writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
+	// 		renderEnd, row, col, height, t.cursorRow, newLines, t.previousLines)
 	// }
 
 	// Write entire buffer at once
@@ -690,57 +687,6 @@ func (t *TUI) findChangedLineRange(newLines []string) (int, int) {
 		}
 	}
 	return firstChanged, lastChanged
-}
-
-func (t *TUI) writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
-	renderEnd, cursorRow, cursorCol, height int, newLines []string) {
-	debugDir := "/tmp/tui"
-	os.MkdirAll(debugDir, 0755)
-
-	timestamp := time.Now().UnixNano() / int64(time.Millisecond)
-	debugPath := filepath.Join(debugDir, "render-"+strconv.FormatInt(timestamp, 10)+".log")
-
-	var debugData strings.Builder
-	debugData.WriteString("firstChanged: ")
-	debugData.WriteString(strconv.Itoa(firstChanged))
-	debugData.WriteString("\nviewportTop: ")
-	debugData.WriteString(strconv.Itoa(viewportTop))
-	debugData.WriteString("\ncursorRow: ")
-	debugData.WriteString(strconv.Itoa(t.cursorRow))
-	debugData.WriteString("\nheight: ")
-	debugData.WriteString(strconv.Itoa(height))
-	debugData.WriteString("\nhardwareCursorRow: ")
-	debugData.WriteString(strconv.Itoa(hardwareCursorRow))
-	debugData.WriteString("\nrenderEnd: ")
-	debugData.WriteString(strconv.Itoa(renderEnd))
-	debugData.WriteString("\nfinalCursorRow: ")
-	debugData.WriteString(strconv.Itoa(finalCursorRow))
-	debugData.WriteString("\ncursorPos: row=")
-	debugData.WriteString(strconv.Itoa(cursorRow))
-	debugData.WriteString(" col=")
-	debugData.WriteString(strconv.Itoa(cursorCol))
-	debugData.WriteString("\nnewLines.length: ")
-	debugData.WriteString(strconv.Itoa(len(newLines)))
-	debugData.WriteString("\npreviousLines.length: ")
-	debugData.WriteString(strconv.Itoa(len(t.previousLines)))
-	debugData.WriteString("\n\n=== newLines ===\n")
-	for i, line := range newLines {
-		debugData.WriteString("[")
-		debugData.WriteString(strconv.Itoa(i))
-		debugData.WriteString("] ")
-		debugData.WriteString(line)
-		debugData.WriteString("\n")
-	}
-	debugData.WriteString("\n=== previousLines ===\n")
-	for i, line := range t.previousLines {
-		debugData.WriteString("[")
-		debugData.WriteString(strconv.Itoa(i))
-		debugData.WriteString("] ")
-		debugData.WriteString(line)
-		debugData.WriteString("\n")
-	}
-
-	os.WriteFile(debugPath, []byte(debugData.String()), 0644)
 }
 
 func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
