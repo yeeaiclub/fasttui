@@ -128,8 +128,6 @@ func (t *TUI) doRender() {
 		lastChanged = len(newLines) - 1
 	}
 
-	appendStart := appendedLines && firstChanged == len(t.previousLines) && firstChanged > 0
-
 	// No changes - but still need to update hardware cursor position if it moved
 	if firstChanged == -1 {
 		t.positionHardwareCursor(row, col, len(newLines))
@@ -165,7 +163,8 @@ func (t *TUI) doRender() {
 		return
 	}
 
-	finalCursorRow := t.renderChangedLines(prevViewportTop, height, firstChanged, appendStart, hardwareCursorRow, viewportTop, computeLineDiff, lastChanged, newLines, width)
+	appendStart := appendedLines && firstChanged == len(t.previousLines) && firstChanged > 0
+	finalCursorRow := t.renderChangedLines(height, firstChanged, appendStart, hardwareCursorRow, viewportTop, computeLineDiff, lastChanged, newLines, width)
 
 	// Track cursor position for next render
 	// cursorRow tracks end of content (for viewport calculation)
@@ -183,7 +182,9 @@ func (t *TUI) doRender() {
 	t.previousWidth = width
 }
 
-func (t *TUI) renderChangedLines(prevViewportTop int, height int, firstChanged int, appendStart bool, hardwareCursorRow int, viewportTop int, computeLineDiff func(targetRow int) int, lastChanged int, newLines []string, width int) int {
+func (t *TUI) renderChangedLines(height int, firstChanged int, appendStart bool, hardwareCursorRow int, viewportTop int, computeLineDiff func(targetRow int) int, lastChanged int, newLines []string, width int) int {
+	prevViewportTop := t.previousViewportTop
+
 	// Render from first changed line to end
 	// Build buffer with all updates wrapped in synchronized output
 	var buffer strings.Builder
