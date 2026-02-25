@@ -1,6 +1,10 @@
 package main
 
 import (
+	"os"
+	"os/signal"
+	"syscall"
+
 	"github.com/yeeaiclub/fasttui"
 	"github.com/yeeaiclub/fasttui/components"
 	"github.com/yeeaiclub/fasttui/terminal"
@@ -23,9 +27,8 @@ func main() {
 	tui.AddChild(components.NewDynamicBorder(func(s string) string { return s }))
 
 	tui.Start()
-	for true {
-	}
-	defer func() {
-		tui.Stop()
-	}()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
 }
