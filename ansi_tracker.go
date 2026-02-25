@@ -33,11 +33,10 @@ func (t *AnsiCodeTracker) Process(ansiCode string) {
 		return
 	}
 
-	parts := splitSemicolon(params)
+	parts := strings.Split(params, ";")
 	i := 0
 	for i < len(parts) {
-		code := parseCode(parts[i])
-
+		code, _ := strconv.Atoi(parts[i])
 		if code == 38 || code == 48 {
 			if i+2 < len(parts) && parts[i+1] == "5" {
 				colorCode := parts[i] + ";" + parts[i+1] + ";" + parts[i+2]
@@ -137,7 +136,7 @@ func (t *AnsiCodeTracker) GetActiveCodes() string {
 		return ""
 	}
 
-	var codes []string
+	codes := make([]string, 0, 10)
 	if t.bold {
 		codes = append(codes, "1")
 	}
@@ -169,10 +168,11 @@ func (t *AnsiCodeTracker) GetActiveCodes() string {
 		codes = append(codes, t.bgColor)
 	}
 
-	if len(codes) == 0 {
-		return ""
-	}
-	return "\x1b[" + joinStrings(codes, ";") + "m"
+	var builder strings.Builder
+	builder.WriteString("\x1b[")
+	builder.WriteString(strings.Join(codes, ";"))
+	builder.WriteString("m")
+	return builder.String()
 }
 
 func (t *AnsiCodeTracker) HasActiveCodes() bool {
@@ -186,20 +186,4 @@ func (t *AnsiCodeTracker) GetLineEndReset() string {
 		return "\x1b[24m"
 	}
 	return ""
-}
-
-func parseCode(s string) int {
-	result, err := strconv.Atoi(s)
-	if err != nil {
-		return 0
-	}
-	return result
-}
-
-func splitSemicolon(s string) []string {
-	return strings.Split(s, ";")
-}
-
-func joinStrings(parts []string, sep string) string {
-	return strings.Join(parts, sep)
 }
