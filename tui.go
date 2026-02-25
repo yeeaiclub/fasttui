@@ -100,6 +100,7 @@ func (t *TUI) doRender() {
 		ct := targetRow - viewportTop
 		return ct - cs
 	}
+
 	newLines := t.renderComponent(width, height)
 	row, col := extractCursorPosition(newLines, height)
 
@@ -107,7 +108,7 @@ func (t *TUI) doRender() {
 
 	newLines = applyLineRests(newLines)
 	fullRender := t.getFullRender(newLines, height, row, col, width)
-	if len(t.previousLines) == 0 && !widthChanged {
+	if t.previousLines == nil && !widthChanged {
 		fullRender(false)
 		return
 	}
@@ -164,7 +165,7 @@ func (t *TUI) doRender() {
 	}
 
 	appendStart := appendedLines && firstChanged == len(t.previousLines) && firstChanged > 0
-	finalCursorRow := t.renderChangedLines(height, firstChanged, appendStart, hardwareCursorRow, viewportTop, computeLineDiff, lastChanged, newLines, width)
+	finalCursorRow := t.renderChangedLines(width, height, firstChanged, lastChanged, viewportTop, hardwareCursorRow, newLines, appendStart, computeLineDiff)
 
 	// Track cursor position for next render
 	// cursorRow tracks end of content (for viewport calculation)
@@ -182,7 +183,7 @@ func (t *TUI) doRender() {
 	t.previousWidth = width
 }
 
-func (t *TUI) renderChangedLines(height int, firstChanged int, appendStart bool, hardwareCursorRow int, viewportTop int, computeLineDiff func(targetRow int) int, lastChanged int, newLines []string, width int) int {
+func (t *TUI) renderChangedLines(width int, height int, firstChanged int, lastChanged int, viewportTop int, hardwareCursorRow int, newLines []string, appendStart bool, computeLineDiff func(targetRow int) int) int {
 	prevViewportTop := t.previousViewportTop
 
 	// Render from first changed line to end
