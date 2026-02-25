@@ -305,43 +305,8 @@ func (e *Editor) Render(width int) []string {
 	}
 
 	for _, line := range visibleLines {
-		displayText := line.Text
-		lineVisibleWith := fasttui.VisibleWidth(line.Text)
-		cursorInPadding := false
-		if line.HasCursor {
-			// Ensure CursorPos is within bounds
-			cursorPos := min(line.CursorPos, len(displayText))
-			before := displayText[:cursorPos]
-			after := displayText[cursorPos:]
-			marker := ""
-			if e.focused {
-				marker = CURSOR_MARKER
-			}
-			if len(after) > 0 {
-				// Get the first grapheme (rune) from 'after'
-				afterRunes := []rune(after)
-				var firstGrapheme string
-				var restAfter string
-				if len(afterRunes) > 0 {
-					firstGrapheme = string(afterRunes[0])
-					restAfter = string(afterRunes[1:])
-				} else {
-					firstGrapheme = ""
-					restAfter = ""
-				}
-				cursor := "\x1b[7m" + firstGrapheme + "\x1b[0m"
-				displayText = before + marker + cursor + restAfter
-				// lineVisibleWith stays the same - we're replacing, not adding
-			} else {
-				cursor := "\x1b[7m \x1b[0m"
-				displayText = before + marker + cursor
-				lineVisibleWith = lineVisibleWith + 1
-				if lineVisibleWith > contentWidth && paddingX > 0 {
-					cursorInPadding = true
-				}
-			}
-		}
-		padding := strings.Repeat(" ", max(0, contentWidth-lineVisibleWith))
+		displayText, lineVisibleWidth, cursorInPadding := e.renderLineWithCursor(line, contentWidth, paddingX)
+		padding := strings.Repeat(" ", max(0, contentWidth-lineVisibleWidth))
 		var lineRenderPadding string
 		if cursorInPadding {
 			lineRenderPadding = string(rightPadding[1])
@@ -360,6 +325,46 @@ func (e *Editor) Render(width int) []string {
 		result = append(result, strings.Repeat(horizontal, width))
 	}
 	return result
+}
+
+func (e *Editor) renderLineWithCursor(line LayoutLine, contentWidth, paddingX int) (string, int, bool) {
+	displayText := line.Text
+	lineVisibleWidth := fasttui.VisibleWidth(line.Text)
+	cursorInPadding := false
+
+	if !line.HasCursor {
+		return displayText, lineVisibleWidth, false
+	}
+
+	cursorPos := min(line.CursorPos, len(displayText))
+	before := displayText[:cursorPos]
+	after := displayText[cursorPos:]
+
+	marker := ""
+	if e.focused {
+		marker = CURSOR_MARKER
+	}
+
+	if len(after) > 0 {
+		afterRunes := []rune(after)
+		var firstGrapheme string
+		var restAfter string
+		if len(afterRunes) > 0 {
+			firstGrapheme = string(afterRunes[0])
+			restAfter = string(afterRunes[1:])
+		}
+		cursor := "\x1b[7m" + firstGrapheme + "\x1b[0m"
+		displayText = before + marker + cursor + restAfter
+	} else {
+		cursor := "\x1b[7m \x1b[0m"
+		displayText = before + marker + cursor
+		lineVisibleWidth = lineVisibleWidth + 1
+		if lineVisibleWidth > contentWidth && paddingX > 0 {
+			cursorInPadding = true
+		}
+	}
+
+	return displayText, lineVisibleWidth, cursorInPadding
 }
 
 func (e *Editor) renderBorder(style string, width int, scrollOffset int) string {
