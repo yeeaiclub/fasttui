@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+var (
+	alphaNumericRe = regexp.MustCompile(`^([a-z]+)([0-9]+)$`)
+	numericAlphaRe = regexp.MustCompile(`^([0-9]+)([a-z]+)$`)
+)
+
 // FuzzyMatch represents the result of a fuzzy match.
 // Lower score = better match.
 type FuzzyMatch struct {
@@ -97,13 +102,11 @@ func isWordBoundaryChar(c byte) bool {
 // getSwappedQuery attempts to swap letters and digits in the query.
 func getSwappedQuery(query string) string {
 	// Match "letters+digits" pattern
-	alphaNumericRe := regexp.MustCompile(`^([a-z]+)([0-9]+)$`)
 	if matches := alphaNumericRe.FindStringSubmatch(query); matches != nil {
 		return matches[2] + matches[1]
 	}
 
 	// Match "digits+letters" pattern
-	numericAlphaRe := regexp.MustCompile(`^([0-9]+)([a-z]+)$`)
 	if matches := numericAlphaRe.FindStringSubmatch(query); matches != nil {
 		return matches[2] + matches[1]
 	}
