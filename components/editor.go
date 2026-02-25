@@ -1319,10 +1319,7 @@ func (e *Editor) pageScroll(direction int) {
 
 	if direction < 0 {
 		// Page up
-		newLine := e.state.cursorLine - pageSize
-		if newLine < 0 {
-			newLine = 0
-		}
+		newLine := max(e.state.cursorLine-pageSize, 0)
 		e.state.cursorLine = newLine
 		e.scrollOffset -= pageSize
 		if e.scrollOffset < 0 {
