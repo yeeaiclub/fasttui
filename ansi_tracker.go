@@ -57,10 +57,12 @@ func NewAnsiCodeTracker() *AnsiCodeTracker {
 //	tracker.Process("\x1b[38;5;208m") // 256-color orange
 //	tracker.Process("\x1b[0m")        // reset all
 func (t *AnsiCodeTracker) Process(ansiCode string) {
-	if len(ansiCode) == 0 || ansiCode[len(ansiCode)-1] != 'm' {
+	// Validate ANSI code format
+	if len(ansiCode) < 3 || ansiCode[len(ansiCode)-1] != 'm' {
 		return
 	}
 
+	// Extract parameters between ESC[ and m
 	params := ansiCode[2 : len(ansiCode)-1]
 	if params == "" || params == "0" {
 		t.Reset()
@@ -68,83 +70,111 @@ func (t *AnsiCodeTracker) Process(ansiCode string) {
 	}
 
 	parts := strings.Split(params, ";")
-	i := 0
-	for i < len(parts) {
-		code, _ := strconv.Atoi(parts[i])
-		if code == 38 || code == 48 {
-			if i+2 < len(parts) && parts[i+1] == "5" {
-				colorCode := parts[i] + ";" + parts[i+1] + ";" + parts[i+2]
-				if code == 38 {
-					t.fgColor = colorCode
-				} else {
-					t.bgColor = colorCode
-				}
-				i += 3
-				continue
-			} else if i+4 < len(parts) && parts[i+1] == "2" {
-				colorCode := parts[i] + ";" + parts[i+1] + ";" + parts[i+2] + ";" + parts[i+3] + ";" + parts[i+4]
-				if code == 38 {
-					t.fgColor = colorCode
-				} else {
-					t.bgColor = colorCode
-				}
-				i += 5
-				continue
-			}
+	for i := 0; i < len(parts); i++ {
+		code, err := strconv.Atoi(parts[i])
+		if err != nil {
+			continue // Skip invalid codes
 		}
 
-		switch code {
-		case 0:
-			t.Reset()
-		case 1:
-			t.bold = true
-		case 2:
-			t.dim = true
-		case 3:
-			t.italic = true
-		case 4:
-			t.underline = true
-		case 5:
-			t.blink = true
-		case 7:
-			t.inverse = true
-		case 8:
-			t.hidden = true
-		case 9:
-			t.strikethrough = true
-		case 21:
-			t.bold = false
-		case 22:
-			t.bold = false
-			t.dim = false
-		case 23:
-			t.italic = false
-		case 24:
-			t.underline = false
-		case 25:
-			t.blink = false
-		case 27:
-			t.inverse = false
-		case 28:
-			t.hidden = false
-		case 29:
-			t.strikethrough = false
-		case 39:
-			t.fgColor = ""
-		case 49:
-			t.bgColor = ""
-		default:
-			if code >= 30 && code <= 37 {
-				t.fgColor = parts[i]
-			} else if code >= 40 && code <= 47 {
-				t.bgColor = parts[i]
-			} else if code >= 90 && code <= 97 {
-				t.fgColor = parts[i]
-			} else if code >= 100 && code <= 107 {
-				t.bgColor = parts[i]
-			}
+		// Handle extended color codes (256-color and RGB)
+		if consumed := t.processExtendedColor(code, parts, i); consumed > 0 {
+			i += consumed - 1
+			continue
 		}
-		i++
+
+		// Handle standard SGR codes
+		t.processStandardCode(code, parts[i])
+	}
+}
+
+// processExtendedColor handles 256-color and RGB color codes.
+// Returns the number of parts consumed (0 if not an extended color code).
+func (t *AnsiCodeTracker) processExtendedColor(code int, parts []string, index int) int {
+	if code != 38 && code != 48 {
+		return 0
+	}
+
+	isForeground := code == 38
+
+	// 256-color: 38;5;n or 48;5;n
+	if index+2 < len(parts) && parts[index+1] == "5" {
+		colorCode := strings.Join(parts[index:index+3], ";")
+		if isForeground {
+			t.fgColor = colorCode
+		} else {
+			t.bgColor = colorCode
+		}
+		return 3
+	}
+
+	// RGB color: 38;2;r;g;b or 48;2;r;g;b
+	if index+4 < len(parts) && parts[index+1] == "2" {
+		colorCode := strings.Join(parts[index:index+5], ";")
+		if isForeground {
+			t.fgColor = colorCode
+		} else {
+			t.bgColor = colorCode
+		}
+		return 5
+	}
+
+	return 0
+}
+
+// processStandardCode handles standard SGR codes for text attributes and basic colors.
+func (t *AnsiCodeTracker) processStandardCode(code int, part string) {
+	switch code {
+	case 0:
+		t.Reset()
+	case 1:
+		t.bold = true
+	case 2:
+		t.dim = true
+	case 3:
+		t.italic = true
+	case 4:
+		t.underline = true
+	case 5:
+		t.blink = true
+	case 7:
+		t.inverse = true
+	case 8:
+		t.hidden = true
+	case 9:
+		t.strikethrough = true
+	case 21:
+		t.bold = false
+	case 22:
+		t.bold = false
+		t.dim = false
+	case 23:
+		t.italic = false
+	case 24:
+		t.underline = false
+	case 25:
+		t.blink = false
+	case 27:
+		t.inverse = false
+	case 28:
+		t.hidden = false
+	case 29:
+		t.strikethrough = false
+	case 39:
+		t.fgColor = ""
+	case 49:
+		t.bgColor = ""
+	default:
+		t.processColorCode(code, part)
+	}
+}
+
+// processColorCode handles basic 8/16 color codes.
+func (t *AnsiCodeTracker) processColorCode(code int, part string) {
+	switch {
+	case code >= 30 && code <= 37, code >= 90 && code <= 97:
+		t.fgColor = part
+	case code >= 40 && code <= 47, code >= 100 && code <= 107:
+		t.bgColor = part
 	}
 }
 
