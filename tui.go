@@ -681,8 +681,8 @@ func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
 
 	workingHeight := max(t.maxLinesRendered, minLinesNeeded)
 
-	for len(result) < workingHeight {
-		result = append(result, "")
+	if padding := workingHeight - len(result); padding > 0 {
+		result = append(result, make([]string, padding)...)
 	}
 
 	viewportStart := max(0, workingHeight-height)
