@@ -84,6 +84,24 @@ func (t *TUI) RequestRender(force bool) {
 	}
 }
 
+func (t *TUI) ForceRender() {
+	t.previousLines = nil
+	t.previousWidth = -1
+	t.cursorRow = 0
+	t.hardwareCursorRow = 0
+	t.maxLinesRendered = 0
+	t.previousViewportTop = 0
+
+	if t.renderRequested {
+		return
+	}
+	t.renderRequested = true
+	select {
+	case t.renderChan <- struct{}{}:
+	default:
+	}
+}
+
 func (t *TUI) doRender() {
 	if t.stopped {
 		return
