@@ -84,6 +84,24 @@ func (t *TUI) RequestRender(force bool) {
 	}
 }
 
+func (t *TUI) ForceRender() {
+	t.previousLines = nil
+	t.previousWidth = -1
+	t.cursorRow = 0
+	t.hardwareCursorRow = 0
+	t.maxLinesRendered = 0
+	t.previousViewportTop = 0
+
+	if t.renderRequested {
+		return
+	}
+	t.renderRequested = true
+	select {
+	case t.renderChan <- struct{}{}:
+	default:
+	}
+}
+
 func (t *TUI) doRender() {
 	if t.stopped {
 		return
@@ -100,6 +118,7 @@ func (t *TUI) doRender() {
 		ct := targetRow - viewportTop
 		return ct - cs
 	}
+
 	newLines := t.renderComponent(width, height)
 	row, col := extractCursorPosition(newLines, height)
 
@@ -107,7 +126,7 @@ func (t *TUI) doRender() {
 
 	newLines = applyLineRests(newLines)
 	fullRender := t.getFullRender(newLines, height, row, col, width)
-	if len(t.previousLines) == 0 && !widthChanged {
+	if t.previousLines == nil && !widthChanged {
 		fullRender(false)
 		return
 	}
@@ -164,7 +183,7 @@ func (t *TUI) doRender() {
 	}
 
 	appendStart := appendedLines && firstChanged == len(t.previousLines) && firstChanged > 0
-	finalCursorRow := t.renderChangedLines(height, firstChanged, appendStart, hardwareCursorRow, viewportTop, computeLineDiff, lastChanged, newLines, width)
+	finalCursorRow := t.renderChangedLines(width, height, firstChanged, lastChanged, viewportTop, hardwareCursorRow, newLines, appendStart, computeLineDiff)
 
 	// Track cursor position for next render
 	// cursorRow tracks end of content (for viewport calculation)
@@ -182,7 +201,7 @@ func (t *TUI) doRender() {
 	t.previousWidth = width
 }
 
-func (t *TUI) renderChangedLines(height int, firstChanged int, appendStart bool, hardwareCursorRow int, viewportTop int, computeLineDiff func(targetRow int) int, lastChanged int, newLines []string, width int) int {
+func (t *TUI) renderChangedLines(width int, height int, firstChanged int, lastChanged int, viewportTop int, hardwareCursorRow int, newLines []string, appendStart bool, computeLineDiff func(targetRow int) int) int {
 	prevViewportTop := t.previousViewportTop
 
 	// Render from first changed line to end
@@ -428,75 +447,6 @@ func (t *TUI) HandleInput(data string) {
 	}
 }
 
-func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, termWidth int, termHeight int) OverlayLayout {
-	marginTop, marginRight, marginBottom, marginLeft := parseMargin(options.Margin)
-
-	availWidth := max(1, termWidth-marginLeft-marginRight)
-	availHeight := max(1, termHeight-marginTop-marginBottom)
-
-	width := parseSizeValue(options.Width, termWidth)
-	if width == 0 {
-		width = min(80, availWidth)
-	}
-	if options.MiniWidth > 0 {
-		width = max(width, options.MiniWidth)
-	}
-	width = max(1, min(width, availWidth))
-
-	var maxHeight *int
-	if options.MaxHeight > 0 {
-		maxHeightVal := parseSizeValue(options.MaxHeight, termHeight)
-		if maxHeightVal > 0 {
-			maxHeightVal = max(1, min(maxHeightVal, availHeight))
-			maxHeight = &maxHeightVal
-		}
-	}
-
-	effectiveHeight := overlayHeight
-	if maxHeight != nil {
-		effectiveHeight = min(overlayHeight, *maxHeight)
-	}
-
-	var row, col int
-
-	if options.Row != 0 {
-		row = options.Row
-	} else {
-		anchor := options.Anchor
-		if anchor == "" {
-			anchor = AnchorCenter
-		}
-		row = anchor.getRow(effectiveHeight, availHeight, marginTop)
-	}
-
-	if options.Col != 0 {
-		col = options.Col
-	} else {
-		anchor := options.Anchor
-		if anchor == "" {
-			anchor = AnchorCenter
-		}
-		col = anchor.getCol(width, availWidth, marginLeft)
-	}
-
-	if options.OffsetY != 0 {
-		row += options.OffsetY
-	}
-	if options.OffsetX != 0 {
-		col += options.OffsetX
-	}
-
-	row = max(marginTop, min(row, termHeight-marginBottom-effectiveHeight))
-	col = max(marginLeft, min(col, termWidth-marginRight-width))
-
-	return OverlayLayout{
-		width:     width,
-		row:       row,
-		col:       col,
-		maxHeight: maxHeight,
-	}
-}
-
 func (t *TUI) parseCellSizeResponse() string {
 	data := t.inputBuffer.String()
 
@@ -706,7 +656,7 @@ func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
 
 		options := entry.options
 
-		layout := t.ResolveOverlayLayout(options, 0, width, height)
+		layout := options.ResolveLayout(0, width, height)
 		overlayWidth := layout.width
 		component := entry.component
 		overlayLines := component.Render(overlayWidth)
@@ -715,7 +665,7 @@ func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
 			overlayLines = overlayLines[:*layout.maxHeight]
 		}
 
-		finalLayout := t.ResolveOverlayLayout(options, len(overlayLines), width, height)
+		finalLayout := options.ResolveLayout(len(overlayLines), width, height)
 
 		rendered = append(rendered, renderedOverlay{
 			overlayLines: overlayLines,
@@ -731,8 +681,8 @@ func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
 
 	workingHeight := max(t.maxLinesRendered, minLinesNeeded)
 
-	for len(result) < workingHeight {
-		result = append(result, "")
+	if padding := workingHeight - len(result); padding > 0 {
+		result = append(result, make([]string, padding)...)
 	}
 
 	viewportStart := max(0, workingHeight-height)

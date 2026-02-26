@@ -2,7 +2,10 @@ package main
 
 import (
 	"math/rand"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/yeeaiclub/fasttui"
@@ -71,14 +74,14 @@ func (app *ChatApp) simulateResponse(loader *components.Loader) {
 	loader.Stop()
 
 	responses := []string{
-		"That's interesting! Tell me more.",
-		"I see what you mean.",
-		"Fascinating perspective!",
-		"Could you elaborate on that?",
-		"That makes sense to me.",
-		"I hadn't thought of it that way.",
-		"Great point!",
-		"Thanks for sharing that.",
+		"## That's interesting! Tell me more.",
+		"**I see what you mean.**",
+		"#### Fascinating perspective!",
+		"`Could you elaborate on that?`",
+		"## That makes sense to me.",
+		"## I hadn't thought of it that way.",
+		"## Great point!",
+		"**Thanks for sharing that.**",
 	}
 	randomResponse := responses[rand.Intn(len(responses))]
 
@@ -128,7 +131,10 @@ func (app *ChatApp) Run() {
 	app.tui.AddChild(instructionsText)
 	app.setupEditor()
 	app.tui.Start()
-	select {}
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
 }
 
 func main() {

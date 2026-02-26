@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+// Layout Parsing Functions
+
 // parseSizeValue parses a size value which can be either an absolute pixel value (int)
 // or a percentage string (e.g., "50%"). When a percentage is provided, it calculates
 // the size based on the total available space. Returns 0 for invalid or negative values.
@@ -59,12 +61,13 @@ func parseMargin(margin any) (marginTop, marginRight, marginBottom, marginLeft i
 	}
 }
 
+// Cursor Handling Functions
+
 // extractCursorPosition searches for a cursor marker in the given lines and returns
 // its row and column position. The cursor marker is removed from the line after extraction.
 // Returns (-1, -1) if no cursor marker is found. The search starts from the bottom
 // of the visible viewport and goes upward.
 func extractCursorPosition(lines []string, height int) (int, int) {
-	// Start from the bottom of the visible viewport
 	viewportTop := max(0, len(lines)-height)
 	for row := len(lines) - 1; row >= viewportTop; row-- {
 		line := lines[row]
@@ -76,8 +79,10 @@ func extractCursorPosition(lines []string, height int) (int, int) {
 			return row, col
 		}
 	}
-	return -1, -1 // Return -1, -1 to indicate no cursor found
+	return -1, -1
 }
+
+// Line Processing Functions
 
 // containsImage checks if a line contains image data using either:
 // - Kitty graphics protocol (\x1b_G)
@@ -101,6 +106,54 @@ func applyLineRests(lines []string) []string {
 	return result
 }
 
+// Diff Detection Functions
+
+// findChangedLineRange finds the range of lines that have changed between two sets of lines.
+// Returns (firstChanged, lastChanged) indices, or (-1, -1) if no changes detected.
+func findChangedLineRange(oldLines, newLines []string) (int, int) {
+	firstChanged := -1
+	lastChanged := -1
+	maxLines := max(len(newLines), len(oldLines))
+	for i := range maxLines {
+		oldLine := ""
+		newLine := ""
+		if i < len(oldLines) {
+			oldLine = oldLines[i]
+		}
+		if i < len(newLines) {
+			newLine = newLines[i]
+		}
+
+		if oldLine != newLine {
+			if firstChanged == -1 {
+				firstChanged = i
+			}
+			lastChanged = i
+		}
+	}
+	return firstChanged, lastChanged
+}
+
+// Logging Functions
+
+// getCrashLogPath returns the path to the crash log file.
+func getCrashLogPath() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = "."
+	}
+	return filepath.Join(homeDir, ".panda", "panda-crash.log")
+}
+
+// writeCrashLog writes crash data to the specified path.
+func writeCrashLog(path string, data string) {
+	dir := filepath.Dir(path)
+	os.MkdirAll(dir, 0755)
+	os.WriteFile(path, []byte(data), 0644)
+}
+
+// logCrashInfo logs detailed crash information including terminal width,
+// line index, and all rendered lines.
 func logCrashInfo(width int, lineIndex int, line string, newLines []string) {
 	crashLogPath := getCrashLogPath()
 	var crashData strings.Builder
@@ -128,20 +181,8 @@ func logCrashInfo(width int, lineIndex int, line string, newLines []string) {
 	writeCrashLog(crashLogPath, crashData.String())
 }
 
-func getCrashLogPath() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = "."
-	}
-	return filepath.Join(homeDir, ".panda", "panda-crash.log")
-}
-
-func writeCrashLog(path string, data string) {
-	dir := filepath.Dir(path)
-	os.MkdirAll(dir, 0755)
-	os.WriteFile(path, []byte(data), 0644)
-}
-
+// buildWidthExceedErrorMsg builds an error message for when a rendered line
+// exceeds the terminal width.
 func buildWidthExceedErrorMsg(lineIndex int, lineWidth int, termWidth int, crashLogPath string) string {
 	var errorMsg strings.Builder
 	errorMsg.WriteString("Rendered line ")
@@ -158,30 +199,7 @@ func buildWidthExceedErrorMsg(lineIndex int, lineWidth int, termWidth int, crash
 	return errorMsg.String()
 }
 
-func findChangedLineRange(oldLines, newLines []string) (int, int) {
-	firstChanged := -1
-	lastChanged := -1
-	maxLines := max(len(newLines), len(oldLines))
-	for i := range maxLines {
-		oldLine := ""
-		newLine := ""
-		if i < len(oldLines) {
-			oldLine = oldLines[i]
-		}
-		if i < len(newLines) {
-			newLine = newLines[i]
-		}
-
-		if oldLine != newLine {
-			if firstChanged == -1 {
-				firstChanged = i
-			}
-			lastChanged = i
-		}
-	}
-	return firstChanged, lastChanged
-}
-
+// writeDebugLog writes detailed debug information about the rendering process.
 func writeDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
 	renderEnd, cursorRow, cursorCol, height int, tCursorRow int, newLines, previousLines []string) {
 	debugDir := "/tmp/tui"
