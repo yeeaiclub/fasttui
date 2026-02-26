@@ -67,3 +67,72 @@ type OverlayLayout struct {
 	col       int
 	maxHeight *int
 }
+
+func (o OverlayOption) ResolveLayout(overlayHeight int, termWidth int, termHeight int) OverlayLayout {
+	marginTop, marginRight, marginBottom, marginLeft := parseMargin(o.Margin)
+
+	availWidth := max(1, termWidth-marginLeft-marginRight)
+	availHeight := max(1, termHeight-marginTop-marginBottom)
+
+	width := parseSizeValue(o.Width, termWidth)
+	if width == 0 {
+		width = min(80, availWidth)
+	}
+	if o.MiniWidth > 0 {
+		width = max(width, o.MiniWidth)
+	}
+	width = max(1, min(width, availWidth))
+
+	var maxHeight *int
+	if o.MaxHeight > 0 {
+		maxHeightVal := parseSizeValue(o.MaxHeight, termHeight)
+		if maxHeightVal > 0 {
+			maxHeightVal = max(1, min(maxHeightVal, availHeight))
+			maxHeight = &maxHeightVal
+		}
+	}
+
+	effectiveHeight := overlayHeight
+	if maxHeight != nil {
+		effectiveHeight = min(overlayHeight, *maxHeight)
+	}
+
+	var row, col int
+
+	if o.Row != 0 {
+		row = o.Row
+	} else {
+		anchor := o.Anchor
+		if anchor == "" {
+			anchor = AnchorCenter
+		}
+		row = anchor.getRow(effectiveHeight, availHeight, marginTop)
+	}
+
+	if o.Col != 0 {
+		col = o.Col
+	} else {
+		anchor := o.Anchor
+		if anchor == "" {
+			anchor = AnchorCenter
+		}
+		col = anchor.getCol(width, availWidth, marginLeft)
+	}
+
+	if o.OffsetY != 0 {
+		row += o.OffsetY
+	}
+	if o.OffsetX != 0 {
+		col += o.OffsetX
+	}
+
+	row = max(marginTop, min(row, termHeight-marginBottom-effectiveHeight))
+	col = max(marginLeft, min(col, termWidth-marginRight-width))
+
+	return OverlayLayout{
+		width:     width,
+		row:       row,
+		col:       col,
+		maxHeight: maxHeight,
+	}
+}

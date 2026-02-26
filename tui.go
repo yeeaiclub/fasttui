@@ -447,75 +447,6 @@ func (t *TUI) HandleInput(data string) {
 	}
 }
 
-func (t *TUI) ResolveOverlayLayout(options OverlayOption, overlayHeight int, termWidth int, termHeight int) OverlayLayout {
-	marginTop, marginRight, marginBottom, marginLeft := parseMargin(options.Margin)
-
-	availWidth := max(1, termWidth-marginLeft-marginRight)
-	availHeight := max(1, termHeight-marginTop-marginBottom)
-
-	width := parseSizeValue(options.Width, termWidth)
-	if width == 0 {
-		width = min(80, availWidth)
-	}
-	if options.MiniWidth > 0 {
-		width = max(width, options.MiniWidth)
-	}
-	width = max(1, min(width, availWidth))
-
-	var maxHeight *int
-	if options.MaxHeight > 0 {
-		maxHeightVal := parseSizeValue(options.MaxHeight, termHeight)
-		if maxHeightVal > 0 {
-			maxHeightVal = max(1, min(maxHeightVal, availHeight))
-			maxHeight = &maxHeightVal
-		}
-	}
-
-	effectiveHeight := overlayHeight
-	if maxHeight != nil {
-		effectiveHeight = min(overlayHeight, *maxHeight)
-	}
-
-	var row, col int
-
-	if options.Row != 0 {
-		row = options.Row
-	} else {
-		anchor := options.Anchor
-		if anchor == "" {
-			anchor = AnchorCenter
-		}
-		row = anchor.getRow(effectiveHeight, availHeight, marginTop)
-	}
-
-	if options.Col != 0 {
-		col = options.Col
-	} else {
-		anchor := options.Anchor
-		if anchor == "" {
-			anchor = AnchorCenter
-		}
-		col = anchor.getCol(width, availWidth, marginLeft)
-	}
-
-	if options.OffsetY != 0 {
-		row += options.OffsetY
-	}
-	if options.OffsetX != 0 {
-		col += options.OffsetX
-	}
-
-	row = max(marginTop, min(row, termHeight-marginBottom-effectiveHeight))
-	col = max(marginLeft, min(col, termWidth-marginRight-width))
-
-	return OverlayLayout{
-		width:     width,
-		row:       row,
-		col:       col,
-		maxHeight: maxHeight,
-	}
-}
-
 func (t *TUI) parseCellSizeResponse() string {
 	data := t.inputBuffer.String()
 
@@ -725,7 +656,7 @@ func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
 
 		options := entry.options
 
-		layout := t.ResolveOverlayLayout(options, 0, width, height)
+		layout := options.ResolveLayout(0, width, height)
 		overlayWidth := layout.width
 		component := entry.component
 		overlayLines := component.Render(overlayWidth)
@@ -734,7 +665,7 @@ func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
 			overlayLines = overlayLines[:*layout.maxHeight]
 		}
 
-		finalLayout := t.ResolveOverlayLayout(options, len(overlayLines), width, height)
+		finalLayout := options.ResolveLayout(len(overlayLines), width, height)
 
 		rendered = append(rendered, renderedOverlay{
 			overlayLines: overlayLines,
