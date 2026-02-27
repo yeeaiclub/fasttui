@@ -10,6 +10,12 @@ import (
 var (
 	kittyProtocolActive              = false
 	lastEventType       KeyEventType = "press"
+
+	csiURegex        = regexp.MustCompile(`^\x1b\[(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?u$`)
+	arrowRegex       = regexp.MustCompile(`^\x1b\[1;(\d+)(?::(\d+))?([ABCD])$`)
+	funcRegex        = regexp.MustCompile(`^\x1b\[(\d+)(?:;(\d+))?(?::(\d+))?~$`)
+	homeEndRegex     = regexp.MustCompile(`^\x1b\[1;(\d+)(?::(\d+))?([HF])$`)
+	modifyOtherRegex = regexp.MustCompile(`^\x1b\[27;(\d+);(\d+)~$`)
 )
 
 type KeyEventType string
@@ -237,7 +243,7 @@ func parseEventType(eventTypeStr string) KeyEventType {
 }
 
 func ParseKittySequence(data string) *ParsedKittySequence {
-	csiUMatch := regexp.MustCompile(`^\x1b\[(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?u$`).FindStringSubmatch(data)
+	csiUMatch := csiURegex.FindStringSubmatch(data)
 	if csiUMatch != nil {
 		codepoint, _ := strconv.Atoi(csiUMatch[1])
 		var shiftedKey *int
@@ -265,7 +271,7 @@ func ParseKittySequence(data string) *ParsedKittySequence {
 		}
 	}
 
-	arrowMatch := regexp.MustCompile(`^\x1b\[1;(\d+)(?::(\d+))?([ABCD])$`).FindStringSubmatch(data)
+	arrowMatch := arrowRegex.FindStringSubmatch(data)
 	if arrowMatch != nil {
 		modValue, _ := strconv.Atoi(arrowMatch[1])
 		eventType := parseEventType(arrowMatch[2])
@@ -278,7 +284,7 @@ func ParseKittySequence(data string) *ParsedKittySequence {
 		}
 	}
 
-	funcMatch := regexp.MustCompile(`^\x1b\[(\d+)(?:;(\d+))?(?::(\d+))?~$`).FindStringSubmatch(data)
+	funcMatch := funcRegex.FindStringSubmatch(data)
 	if funcMatch != nil {
 		keyNum, _ := strconv.Atoi(funcMatch[1])
 		modValue := 1
@@ -304,7 +310,7 @@ func ParseKittySequence(data string) *ParsedKittySequence {
 		}
 	}
 
-	homeEndMatch := regexp.MustCompile(`^\x1b\[1;(\d+)(?::(\d+))?([HF])$`).FindStringSubmatch(data)
+	homeEndMatch := homeEndRegex.FindStringSubmatch(data)
 	if homeEndMatch != nil {
 		modValue, _ := strconv.Atoi(homeEndMatch[1])
 		eventType := parseEventType(homeEndMatch[2])
@@ -352,7 +358,7 @@ func matchesKittySequence(data string, expectedCodepoint int, expectedModifier i
 }
 
 func matchesModifyOtherKeys(data string, expectedKeycode int, expectedModifier int) bool {
-	match := regexp.MustCompile(`^\x1b\[27;(\d+);(\d+)~$`).FindStringSubmatch(data)
+	match := modifyOtherRegex.FindStringSubmatch(data)
 	if match == nil {
 		return false
 	}
@@ -402,12 +408,7 @@ func parseKeyId(keyId string) *struct {
 }
 
 func matchesLegacySequence(data string, sequences []string) bool {
-	for _, seq := range sequences {
-		if data == seq {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(sequences, data)
 }
 
 func matchesLegacyModifierSequence(data string, key string, modifier int) bool {
