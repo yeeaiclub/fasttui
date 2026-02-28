@@ -1,4 +1,6 @@
-package exselect
+package main
+
+type Container interface{}
 
 type ExSelectorComponent struct {
 	options     []string
@@ -21,5 +23,4 @@ func (e *ExSelectorComponent) HandleInput() {
 }
 
 func (e *ExSelectorComponent) updateList() {
-
 }
