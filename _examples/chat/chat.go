@@ -14,10 +14,12 @@ import (
 )
 
 type ChatApp struct {
-	tui          *fasttui.TUI
-	term         *terminal.ProcessTerminal
-	isResponding bool
-	theme        *components.MarkdownTheme
+	tui            *fasttui.TUI
+	term           *terminal.ProcessTerminal
+	isResponding   bool
+	theme          *components.MarkdownTheme
+	cancelCount    int
+	lastCancelTime time.Time
 }
 
 func NewChatApp() *ChatApp {
@@ -119,8 +121,27 @@ func (app *ChatApp) handleSubmit(value string) {
 
 func (app *ChatApp) setupEditor() {
 	editor := components.NewEditor(app.term, app.handleSubmit)
+	editor.OnCancel = func() {
+		// Double Ctrl+C to exit
+		now := time.Now()
+		if app.cancelCount > 0 && now.Sub(app.lastCancelTime) < 2*time.Second {
+			// Second Ctrl+C within 2 seconds - exit gracefully
+			app.exit()
+			return
+		}
+		// First Ctrl+C or timeout - show hint and reset
+		app.cancelCount = 1
+		app.lastCancelTime = now
+	}
 	app.tui.AddChild(editor)
 	app.tui.SetFocus(editor)
+}
+
+func (app *ChatApp) exit() {
+	app.tui.Stop()
+	// Give terminal time to fully restore state
+	time.Sleep(200 * time.Millisecond)
+	os.Exit(0)
 }
 
 func (app *ChatApp) Run() {

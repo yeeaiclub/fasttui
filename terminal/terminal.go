@@ -219,6 +219,15 @@ func (p *ProcessTerminal) Stop() {
 		p.isKittyProtocolActive = false
 	}
 
+	// Show cursor (ensure it's visible after exit)
+	p.print("\x1b[?25h")
+
+	// Reset SGR (colors, etc)
+	p.print("\x1b[0m")
+
+	// Move cursor down 4 lines to avoid overwriting last rendered content
+	p.print("\r\n\r\n\r\n\r\n")
+
 	// Clean up StdinBuffer
 	if p.buffer != nil {
 		p.buffer.Close()
@@ -232,6 +241,9 @@ func (p *ProcessTerminal) Stop() {
 
 	// Stop signal notifications
 	signal.Stop(p.resizeSignalChan)
+
+	// Wait a moment for goroutines to exit
+	time.Sleep(50 * time.Millisecond)
 
 	// Restore terminal state
 	if p.oldState != nil {
