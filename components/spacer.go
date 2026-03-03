@@ -4,13 +4,13 @@ type Spacer struct {
 	lines int
 }
 
-func NewSpacer() *Spacer {
-	return &Spacer{}
+func NewSpacer(lines int) *Spacer {
+	return &Spacer{lines: lines}
 }
 
 func (s Spacer) Render(width int) []string {
-	line := make([]string, width)
-	for i := range width {
+	line := make([]string, s.lines)
+	for i := range s.lines {
 		line[i] = " "
 	}
 	return line

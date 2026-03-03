@@ -183,7 +183,7 @@ func (t *TUI) doRender() {
 	}
 
 	appendStart := appendedLines && firstChanged == len(t.previousLines) && firstChanged > 0
-	finalCursorRow := t.renderChangedLines(width, height, firstChanged, lastChanged, viewportTop, hardwareCursorRow, newLines, appendStart, computeLineDiff)
+	finalCursorRow := t.renderChangedLines(width, height, firstChanged, lastChanged, newLines, appendStart)
 
 	// Track cursor position for next render
 	// cursorRow tracks end of content (for viewport calculation)
@@ -201,29 +201,43 @@ func (t *TUI) doRender() {
 	t.previousWidth = width
 }
 
-func (t *TUI) renderChangedLines(width int, height int, firstChanged int, lastChanged int, viewportTop int, hardwareCursorRow int, newLines []string, appendStart bool, computeLineDiff func(targetRow int) int) int {
+func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, newLines []string, appendStart bool) int {
+	viewportTop := max(0, t.maxLinesRendered-height)
+	hardwareCursorRow := t.hardwareCursorRow
 	prevViewportTop := t.previousViewportTop
+
+	computeLineDiff := func(targetRow int) int {
+		cs := hardwareCursorRow - prevViewportTop
+		ct := targetRow - viewportTop
+		return ct - cs
+	}
 
 	// Render from first changed line to end
 	// Build buffer with all updates wrapped in synchronized output
 	var buffer strings.Builder
 	buffer.WriteString("\x1b[?2026h") // Begin synchronized output
 
+	// Calculate the bottom row index of the previous viewport
+	// Used to determine if scrolling is needed when moving to a target row
 	prevViewportBottom := prevViewportTop + height - 1
+
 	moveTargetRow := firstChanged
 	if appendStart {
 		moveTargetRow = firstChanged - 1
 	}
 
+	// If target row is below the visible area, scroll down
 	if moveTargetRow > prevViewportBottom {
+		// Get current cursor position on screen
 		currentScreenRow := max(0, min(height-1, hardwareCursorRow-prevViewportTop))
+		// Move cursor to bottom of screen
 		moveToBottom := height - 1 - currentScreenRow
 		if moveToBottom > 0 {
 			buffer.WriteString("\x1b[")
 			buffer.WriteString(strconv.Itoa(moveToBottom))
 			buffer.WriteString("B")
 		}
-
+		// Scroll down to show the target row
 		scroll := moveTargetRow - prevViewportBottom
 		buffer.WriteString(strings.Repeat("\r\n", scroll))
 		prevViewportTop += scroll
@@ -396,15 +410,21 @@ func (t *TUI) start() error {
 	)
 }
 
+// SetFocus sets the component that currently receives keyboard input.
+// In a TUI, only one interactive component (editor, selector, list, etc.) can receive input at a time.
+// This method switches the "input focus": first unfocus the old component, then focus the new one.
 func (t *TUI) SetFocus(component Component) {
+	// Unfocus the previously focused component
 	if t.focusedComponent != nil {
 		if f, ok := t.focusedComponent.(Focusable); ok {
 			f.SetFocused(false)
 		}
 	}
 
+	// Switch to the new component
 	t.focusedComponent = component
 
+	// Activate focus on the new component
 	if component != nil {
 		if f, ok := t.focusedComponent.(Focusable); ok {
 			f.SetFocused(true)

@@ -20,6 +20,8 @@ type ChatApp struct {
 	theme          *components.MarkdownTheme
 	cancelCount    int
 	lastCancelTime time.Time
+	selector       *ExtensionSelectorComponent
+	editor         *components.Editor
 }
 
 func NewChatApp() *ChatApp {
@@ -95,6 +97,46 @@ func (app *ChatApp) simulateResponse(loader *components.Loader) {
 	app.tui.RequestRender(false)
 }
 
+func (app *ChatApp) showGitStatusConfirm() {
+	app.selector = NewExtensionSelectorComponent(
+		"Execute git status?",
+		[]string{"Yes", "No"},
+		func(option string) {
+			app.hideSelector()
+			if option == "Yes" {
+				app.addUserMessage("git status")
+				app.addBotMessage("Executing `git status`... (simulated)")
+			}
+			app.isResponding = false
+		},
+		func() {
+			app.hideSelector()
+			app.isResponding = false
+		},
+		nil,
+	)
+	app.tui.AddChild(app.selector)
+	app.tui.SetFocus(app.selector)
+	app.tui.RequestRender(false)
+}
+
+func (app *ChatApp) hideSelector() {
+	if app.selector != nil {
+		app.selector.Dispose()
+		app.tui.RemoveChild(app.selector)
+		app.selector = nil
+	}
+	app.tui.SetFocus(app.editor)
+	app.tui.RequestRender(false)
+}
+
+func (app *ChatApp) addBotMessage(text string) {
+	botMessage := components.NewMarkdown(text, 1, 1, app.theme, nil)
+	children := app.tui.GetChildren()
+	app.tui.InsertChildAt(len(children)-1, botMessage)
+	app.tui.RequestRender(false)
+}
+
 func (app *ChatApp) handleSubmit(value string) {
 	if app.isResponding {
 		return
@@ -109,6 +151,10 @@ func (app *ChatApp) handleSubmit(value string) {
 	case "/clear":
 		app.handleClearCommand()
 		return
+	case "git status":
+		app.isResponding = true
+		app.showGitStatusConfirm()
+		return
 	}
 
 	if trimmed != "" {
@@ -120,8 +166,8 @@ func (app *ChatApp) handleSubmit(value string) {
 }
 
 func (app *ChatApp) setupEditor() {
-	editor := components.NewEditor(app.term, app.handleSubmit)
-	editor.OnCancel = func() {
+	app.editor = components.NewEditor(app.term, app.handleSubmit)
+	app.editor.OnCancel = func() {
 		// Double Ctrl+C to exit
 		now := time.Now()
 		if app.cancelCount > 0 && now.Sub(app.lastCancelTime) < 2*time.Second {
@@ -133,8 +179,8 @@ func (app *ChatApp) setupEditor() {
 		app.cancelCount = 1
 		app.lastCancelTime = now
 	}
-	app.tui.AddChild(editor)
-	app.tui.SetFocus(editor)
+	app.tui.AddChild(app.editor)
+	app.tui.SetFocus(app.editor)
 }
 
 func (app *ChatApp) exit() {

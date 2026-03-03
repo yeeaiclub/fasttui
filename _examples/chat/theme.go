@@ -2,64 +2,53 @@ package main
 
 import "github.com/yeeaiclub/fasttui/components"
 
-// ANSI color functions
-func cyan(s string) string {
-	return "\x1b[36m" + s + "\x1b[0m"
-}
+const (
+	ansiReset = "\x1b[0m"
+	ansiCyan  = "\x1b[36m"
+	ansiBold  = "\x1b[1m"
+	ansiWhite = "\x1b[37m"
+	ansiDim   = "\x1b[2m"
+)
 
-func dim(s string) string {
-	return "\x1b[2m" + s + "\x1b[0m"
-}
+var (
+	cyan = func(s string) string {
+		return ansiCyan + s + ansiReset
+	}
+	dim = func(s string) string {
+		return ansiDim + s + ansiReset
+	}
+)
 
 func bold(s string) string {
-	return "\x1b[1m" + s + "\x1b[0m"
+	return ansiBold + s + ansiReset
 }
 
-func italic(s string) string {
-	return "\x1b[3m" + s + "\x1b[0m"
+func ThemeFg(colorName string, text string) string {
+	switch colorName {
+	case "accent":
+		return ansiCyan + ansiBold + text + ansiReset
+	case "text":
+		return ansiWhite + text + ansiReset
+	default:
+		return text
+	}
 }
 
-func underline(s string) string {
-	return "\x1b[4m" + s + "\x1b[0m"
-}
-
-func strikethrough(s string) string {
-	return "\x1b[9m" + s + "\x1b[0m"
-}
-
-func green(s string) string {
-	return "\x1b[32m" + s + "\x1b[0m"
-}
-
-func yellow(s string) string {
-	return "\x1b[33m" + s + "\x1b[0m"
-}
-
-func blue(s string) string {
-	return "\x1b[34m" + s + "\x1b[0m"
-}
-
-func magenta(s string) string {
-	return "\x1b[35m" + s + "\x1b[0m"
-}
-
-// CreateDefaultMarkdownTheme creates the default markdown theme
 func CreateDefaultMarkdownTheme() *components.MarkdownTheme {
 	return &components.MarkdownTheme{
-		Heading:         cyan,
-		Link:            blue,
+		Heading:         bold,
+		Link:            cyan,
 		LinkURL:         dim,
-		Code:            yellow,
-		CodeBlock:       green,
+		Code:            func(s string) string { return "`" + s + "`" },
+		CodeBlock:       func(s string) string { return s },
 		CodeBlockBorder: dim,
-		Quote:           italic,
-		QuoteBorder:     cyan,
-		HR:              dim,
-		ListBullet:      cyan,
+		Quote:           func(s string) string { return "> " + s },
+		QuoteBorder:     dim,
+		HR:              func(s string) string { return "---" },
+		ListBullet:      func(s string) string { return "• " + s },
 		Bold:            bold,
-		Italic:          italic,
-		Strikethrough:   strikethrough,
-		Underline:       underline,
-		CodeBlockIndent: "  ",
+		Italic:          func(s string) string { return "_" + s + "_" },
+		Strikethrough:   func(s string) string { return "~~" + s + "~~" },
+		Underline:       func(s string) string { return "__" + s + "__" },
 	}
 }
