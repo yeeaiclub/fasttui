@@ -40,7 +40,8 @@ func (app *ChatApp) handleDeleteCommand() {
 	if len(children) > 3 {
 		app.tui.RemoveChildAt(len(children) - 2)
 	}
-	app.tui.RequestRender(false)
+
+	app.tui.TriggerRender()
 }
 
 func (app *ChatApp) handleClearCommand() {
@@ -49,7 +50,7 @@ func (app *ChatApp) handleClearCommand() {
 		app.tui.RemoveChildAt(2)
 		children = app.tui.GetChildren()
 	}
-	app.tui.RequestRender(false)
+	app.tui.TriggerRender()
 }
 
 func (app *ChatApp) addUserMessage(value string) {
@@ -67,7 +68,7 @@ func (app *ChatApp) addLoader() *components.Loader {
 	)
 	children := app.tui.GetChildren()
 	app.tui.InsertChildAt(len(children)-1, loader)
-	app.tui.RequestRender(false)
+	app.tui.TriggerRender()
 	return loader
 }
 
@@ -94,7 +95,7 @@ func (app *ChatApp) simulateResponse(loader *components.Loader) {
 	app.tui.InsertChildAt(len(children)-1, botMessage)
 
 	app.isResponding = false
-	app.tui.RequestRender(false)
+	app.tui.TriggerRender()
 }
 
 func (app *ChatApp) showGitStatusConfirm() {
@@ -117,7 +118,7 @@ func (app *ChatApp) showGitStatusConfirm() {
 	)
 	app.tui.AddChild(app.selector)
 	app.tui.SetFocus(app.selector)
-	app.tui.RequestRender(false)
+	app.tui.TriggerRender()
 }
 
 func (app *ChatApp) hideSelector() {
@@ -127,14 +128,14 @@ func (app *ChatApp) hideSelector() {
 		app.selector = nil
 	}
 	app.tui.SetFocus(app.editor)
-	app.tui.RequestRender(false)
+	app.tui.TriggerRender()
 }
 
 func (app *ChatApp) addBotMessage(text string) {
 	botMessage := components.NewMarkdown(text, 1, 1, app.theme, nil)
 	children := app.tui.GetChildren()
 	app.tui.InsertChildAt(len(children)-1, botMessage)
-	app.tui.RequestRender(false)
+	app.tui.TriggerRender()
 }
 
 func (app *ChatApp) handleSubmit(value string) {
