@@ -22,6 +22,7 @@ type ChatApp struct {
 	lastCancelTime time.Time
 	selector       *ExtensionSelectorComponent
 	editor         *components.Editor
+	footer         *FooterComponent
 }
 
 func NewChatApp() *ChatApp {
@@ -36,26 +37,33 @@ func NewChatApp() *ChatApp {
 }
 
 func (app *ChatApp) handleDeleteCommand() {
+	// Remove the last message (before editor)
 	children := app.tui.GetChildren()
-	if len(children) > 3 {
-		app.tui.RemoveChildAt(len(children) - 2)
+	// Structure: welcome, instructions, [messages...], editor, footer
+	// Messages start at index 2, editor is at len-2, footer at len-1
+	// Last message is at len-3
+	if len(children) > 4 {
+		app.tui.RemoveChildAt(len(children) - 3)
 	}
-	app.tui.RequestRender(false)
+	app.tui.TriggerRender()
 }
 
 func (app *ChatApp) handleClearCommand() {
+	// Structure: welcome, instructions, [messages...], editor, footer
+	// Keep welcome(0), instructions(1), editor(len-2), footer(len-1)
 	children := app.tui.GetChildren()
-	for len(children) > 3 {
+	for len(children) > 4 {
 		app.tui.RemoveChildAt(2)
 		children = app.tui.GetChildren()
 	}
-	app.tui.RequestRender(false)
+	app.tui.TriggerRender()
 }
 
 func (app *ChatApp) addUserMessage(value string) {
 	userMessage := components.NewMarkdown(value, 1, 1, app.theme, nil)
+	// Insert before editor (editor is at len-2, footer at len-1)
 	children := app.tui.GetChildren()
-	app.tui.InsertChildAt(len(children)-1, userMessage)
+	app.tui.InsertChildAt(len(children)-2, userMessage)
 }
 
 func (app *ChatApp) addLoader() *components.Loader {
@@ -65,9 +73,10 @@ func (app *ChatApp) addLoader() *components.Loader {
 		dim,
 		"Thinking...",
 	)
+	// Insert before editor (editor is at len-2, footer at len-1)
 	children := app.tui.GetChildren()
-	app.tui.InsertChildAt(len(children)-1, loader)
-	app.tui.RequestRender(false)
+	app.tui.InsertChildAt(len(children)-2, loader)
+	app.tui.TriggerRender()
 	return loader
 }
 
@@ -90,11 +99,12 @@ func (app *ChatApp) simulateResponse(loader *components.Loader) {
 	randomResponse := responses[rand.Intn(len(responses))]
 
 	botMessage := components.NewMarkdown(randomResponse, 1, 1, app.theme, nil)
+	// Insert before editor (editor is at len-2, footer at len-1)
 	children := app.tui.GetChildren()
-	app.tui.InsertChildAt(len(children)-1, botMessage)
+	app.tui.InsertChildAt(len(children)-2, botMessage)
 
 	app.isResponding = false
-	app.tui.RequestRender(false)
+	app.tui.TriggerRender()
 }
 
 func (app *ChatApp) showGitStatusConfirm() {
@@ -117,7 +127,7 @@ func (app *ChatApp) showGitStatusConfirm() {
 	)
 	app.tui.AddChild(app.selector)
 	app.tui.SetFocus(app.selector)
-	app.tui.RequestRender(false)
+	app.tui.TriggerRender()
 }
 
 func (app *ChatApp) hideSelector() {
@@ -127,14 +137,15 @@ func (app *ChatApp) hideSelector() {
 		app.selector = nil
 	}
 	app.tui.SetFocus(app.editor)
-	app.tui.RequestRender(false)
+	app.tui.TriggerRender()
 }
 
 func (app *ChatApp) addBotMessage(text string) {
 	botMessage := components.NewMarkdown(text, 1, 1, app.theme, nil)
+	// Insert before editor (editor is at len-2, footer at len-1)
 	children := app.tui.GetChildren()
-	app.tui.InsertChildAt(len(children)-1, botMessage)
-	app.tui.RequestRender(false)
+	app.tui.InsertChildAt(len(children)-2, botMessage)
+	app.tui.TriggerRender()
 }
 
 func (app *ChatApp) handleSubmit(value string) {
@@ -183,6 +194,11 @@ func (app *ChatApp) setupEditor() {
 	app.tui.SetFocus(app.editor)
 }
 
+func (app *ChatApp) setupFooter() {
+	app.footer = NewFooterComponent(0, "gpt-4")
+	app.tui.AddChild(app.footer)
+}
+
 func (app *ChatApp) exit() {
 	app.tui.Stop()
 	// Give terminal time to fully restore state
@@ -197,6 +213,7 @@ func (app *ChatApp) Run() {
 	app.tui.AddChild(welcomeText)
 	app.tui.AddChild(instructionsText)
 	app.setupEditor()
+	app.setupFooter()
 	app.tui.Start()
 
 	sigChan := make(chan os.Signal, 1)

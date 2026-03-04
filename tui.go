@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/yeeaiclub/fasttui/keys"
+	"github.com/yeeaiclub/fasttui/log"
 )
 
 type TUI struct {
@@ -65,15 +66,7 @@ func (t *TUI) renderLoop() {
 	}
 }
 
-func (t *TUI) RequestRender(force bool) {
-	if force {
-		t.previousLines = nil
-		t.previousWidth = -1
-		t.cursorRow = 0
-		t.hardwareCursorRow = 0
-		t.maxLinesRendered = 0
-		t.previousViewportTop = 0
-	}
+func (t *TUI) TriggerRender() {
 	if t.renderRequested {
 		return
 	}
@@ -274,11 +267,11 @@ func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, n
 
 		line := newLines[i]
 		if !containsImage(line) && VisibleWidth(line) > width {
-			logCrashInfo(width, i, line, newLines)
-			crashLogPath := getCrashLogPath()
+			log.LogCrashInfo(VisibleWidth, width, i, line, newLines)
+			crashLogPath := log.GetCrashLogPath()
 
 			t.Stop()
-			panic(buildWidthExceedErrorMsg(i, VisibleWidth(line), width, crashLogPath))
+			panic(log.BuildWidthExceedErrorMsg(i, VisibleWidth(line), width, crashLogPath))
 		}
 		buffer.WriteString(line)
 	}
@@ -374,6 +367,7 @@ func (t *TUI) getFullRender(newLines []string, height int, row int, col int, wid
 		if clear {
 			buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
 		}
+
 		for i := range newLines {
 			if i > 0 {
 				buffer.WriteString("\r\n")
@@ -382,6 +376,7 @@ func (t *TUI) getFullRender(newLines []string, height int, row int, col int, wid
 		}
 		buffer.WriteString("\x1b[?2026l") // End synchronized output
 		t.terminal.Write(buffer.String())
+
 		t.cursorRow = max(0, len(newLines)-1)
 		t.hardwareCursorRow = t.cursorRow
 		// Reset max lines when clearing, otherwise track growth
@@ -405,7 +400,7 @@ func (t *TUI) start() error {
 			t.HandleInput(data)
 		},
 		func() {
-			t.RequestRender(false)
+			t.TriggerRender()
 		},
 	)
 }
@@ -450,7 +445,7 @@ func (t *TUI) HandleInput(data string) {
 		}
 	}
 	if focusedOverlay != nil && !t.isOverlayVisible(focusedOverlay) {
-		topVisible := t.getTopmostVisibleOverlay()
+		topVisible := t.getTopVisibleOverlay()
 		if topVisible != nil {
 			t.SetFocus(topVisible.component)
 		} else {
@@ -463,7 +458,7 @@ func (t *TUI) HandleInput(data string) {
 			return
 		}
 		t.focusedComponent.HandleInput(data)
-		t.RequestRender(false)
+		t.TriggerRender()
 	}
 }
 
@@ -480,8 +475,7 @@ func (t *TUI) parseCellSizeResponse() string {
 
 		if err1 == nil && err2 == nil && heightPx > 0 && widthPx > 0 {
 			t.Invalidate()
-			t.RequestRender(false)
-
+			t.TriggerRender()
 			t.inputBuffer.Reset()
 			t.cellSizeQueryPending = false
 			return ""
@@ -519,7 +513,7 @@ func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), f
 		t.SetFocus(component)
 	}
 	t.terminal.HideCursor()
-	t.RequestRender(false)
+	t.TriggerRender()
 
 	hide := func() {
 		t.hide(component)
@@ -544,7 +538,7 @@ func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), f
 		t.overlayStacks[index].hidden = hidden
 		if hidden {
 			if t.focusedComponent == component {
-				topVisible := t.getTopmostVisibleOverlay()
+				topVisible := t.getTopVisibleOverlay()
 				if topVisible != nil {
 					t.SetFocus(topVisible.component)
 				} else {
@@ -556,7 +550,7 @@ func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), f
 				t.SetFocus(component)
 			}
 		}
-		t.RequestRender(false)
+		t.TriggerRender()
 	}
 
 	isHidden := func() bool {
@@ -583,7 +577,7 @@ func (t *TUI) hide(component Component) {
 		preFocus := t.overlayStacks[index].preFocus
 		t.overlayStacks = append(t.overlayStacks[:index], t.overlayStacks[index+1:]...)
 		if t.focusedComponent == component {
-			topVisible := t.getTopmostVisibleOverlay()
+			topVisible := t.getTopVisibleOverlay()
 			if topVisible != nil {
 				t.SetFocus(topVisible.component)
 			} else {
@@ -593,7 +587,8 @@ func (t *TUI) hide(component Component) {
 		if len(t.overlayStacks) == 0 {
 			t.terminal.HideCursor()
 		}
-		t.RequestRender(false)
+
+		t.TriggerRender()
 	}
 }
 
@@ -605,7 +600,7 @@ func (t *TUI) HideOverlay() {
 	t.overlayStacks = t.overlayStacks[:len(t.overlayStacks)-1]
 
 	// Find topmost visible overlay, or fall back to preFocus
-	topVisible := t.getTopmostVisibleOverlay()
+	topVisible := t.getTopVisibleOverlay()
 	if topVisible != nil {
 		t.SetFocus(topVisible.component)
 	} else {
@@ -615,7 +610,7 @@ func (t *TUI) HideOverlay() {
 	if len(t.overlayStacks) == 0 {
 		t.terminal.HideCursor()
 	}
-	t.RequestRender(false)
+	t.TriggerRender()
 }
 
 func (t *TUI) HasOverlay() bool {
@@ -640,7 +635,7 @@ func (t *TUI) isOverlayVisible(entry *Overlay) bool {
 }
 
 // GetTopmostVisibleOverlay returns the topmost visible overlay, or nil if none.
-func (t *TUI) getTopmostVisibleOverlay() *Overlay {
+func (t *TUI) getTopVisibleOverlay() *Overlay {
 	for i := len(t.overlayStacks) - 1; i >= 0; i-- {
 		entry := t.overlayStacks[i]
 		if t.isOverlayVisible(&entry) {
@@ -790,7 +785,7 @@ func (t *TUI) SetShowHardwareCursor(enabled bool) {
 	if !enabled {
 		t.terminal.HideCursor()
 	}
-	t.RequestRender(false)
+	t.TriggerRender()
 }
 
 func (t *TUI) SetClearOnShrink(enabled bool) {

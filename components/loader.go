@@ -6,7 +6,7 @@ import (
 
 // UIRenderer interface for components that need to trigger UI updates
 type UIRenderer interface {
-	RequestRender(force bool)
+	TriggerRender()
 }
 
 // Loader component that updates every 80ms with spinning animation
@@ -120,6 +120,6 @@ func (l *Loader) updateDisplay() {
 	l.Text.SetText(text)
 
 	if l.ui != nil {
-		l.ui.RequestRender(false)
+		l.ui.TriggerRender()
 	}
 }
