@@ -29,6 +29,7 @@ type Editor struct {
 	// Callbacks
 	OnSubmit func(text string)
 	OnChange func(text string)
+	OnCancel func()
 
 	// History for up/down navigation
 	history []string
@@ -90,6 +91,9 @@ func (e *Editor) HandleInput(data string) {
 
 	// Ctrl+C - let parent handle (exit/clear)
 	if kb.Matches(data, keys.EditorActionCopy) {
+		if e.OnCancel != nil {
+			e.OnCancel()
+		}
 		return
 	}
 
