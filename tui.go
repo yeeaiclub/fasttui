@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/yeeaiclub/fasttui/keys"
-	"github.com/yeeaiclub/fasttui/log"
 )
 
 type TUI struct {
@@ -267,11 +266,11 @@ func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, n
 
 		line := newLines[i]
 		if !containsImage(line) && VisibleWidth(line) > width {
-			log.LogCrashInfo(VisibleWidth, width, i, line, newLines)
-			crashLogPath := log.GetCrashLogPath()
+			LogCrashInfo(width, i, line, newLines)
+			crashLogPath := GetCrashLogPath()
 
 			t.Stop()
-			panic(log.BuildWidthExceedErrorMsg(i, VisibleWidth(line), width, crashLogPath))
+			panic(BuildWidthExceedErrorMsg(i, VisibleWidth(line), width, crashLogPath))
 		}
 		buffer.WriteString(line)
 	}
