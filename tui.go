@@ -366,6 +366,7 @@ func (t *TUI) getFullRender(newLines []string, height int, row int, col int, wid
 		if clear {
 			buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
 		}
+
 		for i := range newLines {
 			if i > 0 {
 				buffer.WriteString("\r\n")
@@ -374,6 +375,7 @@ func (t *TUI) getFullRender(newLines []string, height int, row int, col int, wid
 		}
 		buffer.WriteString("\x1b[?2026l") // End synchronized output
 		t.terminal.Write(buffer.String())
+
 		t.cursorRow = max(0, len(newLines)-1)
 		t.hardwareCursorRow = t.cursorRow
 		// Reset max lines when clearing, otherwise track growth

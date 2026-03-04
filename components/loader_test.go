@@ -14,7 +14,7 @@ type mockUIRenderer struct {
 	renderCount int
 }
 
-func (m *mockUIRenderer) RequestRender() {
+func (m *mockUIRenderer) TriggerRender() {
 	m.renderCount++
 }
 
