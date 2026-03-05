@@ -1,0 +1,49 @@
+# Changelog
+
+## [Unreleased]
+
+### Fixed
+
+- **Critical: Fixed "Rendered line exceeds terminal width" panic**
+  - Root cause: Ambiguous-width Unicode characters (arrows ↑↓←→, box drawing characters ─│┌┐, etc.) were incorrectly calculated as width 2 instead of width 1, causing severe width calculation mismatches
+  - Configured `go-runewidth` library with `EastAsianWidth = false` to match modern terminal rendering behavior
+  - These characters are now correctly treated as width 1, matching how most terminals actually render them
+
+- **Fixed Unicode character width calculation in text slicing**
+  - `SliceWithWidth()` now uses grapheme segmentation with `GraphemeWidth()` instead of treating every character as width 1
+  - `ExtractSegments()` now properly handles wide characters (Chinese, Japanese, Korean, emoji, etc.)
+  - Ensures accurate text truncation and slicing for all Unicode characters
+
+- **Fixed Editor component width calculation inconsistencies**
+  - Removed custom `runeWidth()` function that had inaccurate Unicode range checks
+  - Now uses standardized `fasttui.GraphemeWidth()` throughout the codebase
+  - Added `fillWithHorizontal()` helper function to correctly fill borders with wide characters
+  - Fixed `renderBorder()` to properly calculate repeat count for box drawing characters
+  - Added safety checks to ensure rendered lines never exceed terminal width
+
+- **Fixed Footer component to use standard library functions**
+  - Replaced custom width calculation functions with `fasttui.VisibleWidth()`
+  - Now uses `fasttui.TruncateToWidth()` and `fasttui.SliceByColumn()` for proper Unicode handling
+  - Added final width validation to prevent overflow
+
+### Changed
+
+- **Standardized character width calculation across all components**
+  - All components now use the same `runewidthCondition` configuration
+  - Consistent handling of ambiguous-width characters throughout the library
+  - Improved compatibility with various terminal emulators
+
+### Technical Details
+
+- Added `runewidthCondition` global variable in `text_segment.go` with `EastAsianWidth = false`
+- Updated `GraphemeWidth()` to use custom runewidth condition
+- Added multiple safety checks in rendering pipeline to prevent width overflow
+- All existing tests continue to pass with the new width calculation logic
+
+### Impact
+
+- Fixes crashes when using arrows, box drawing characters, or other ambiguous-width Unicode characters
+- Improves display accuracy for mixed ASCII and Unicode content
+- Better terminal compatibility across different platforms and locales
+- Resolves issues where horizontal borders were not displaying completely
+.1
