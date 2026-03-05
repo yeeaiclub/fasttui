@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -47,19 +48,9 @@ func NewStdinBuffer() *StdinBuffer {
 	return st
 }
 
-func (s *StdinBuffer) Process(data string) {
-	// Normalize high-bit characters
-	var seq string
-	if len(data) == 1 && data[0] > 127 {
-		seq = ESC + string(data[0]-128)
-	} else {
-		seq = data
-	}
-
-	if len(seq) == 0 && len(data) == 1 {
-		s.evChan <- Event{Type: "data", Data: ""}
-		return
-	}
+func (s *StdinBuffer) Process(data []byte) {
+	// Convert bytes to string, preserving UTF-8 encoding
+	seq := string(data)
 
 	s.buffer += seq
 	s.processBuffer()
@@ -113,10 +104,16 @@ func (s *StdinBuffer) processNormal() bool {
 		return true
 	}
 
-	// Regular character
+	// Regular character - decode UTF-8 rune properly
 	if len(s.buffer) > 0 {
-		s.emitData(string(s.buffer[0]))
-		s.buffer = s.buffer[1:]
+		r, size := utf8.DecodeRuneInString(s.buffer)
+		if r == utf8.RuneError && size == 1 {
+			// Invalid UTF-8, skip this byte
+			s.buffer = s.buffer[1:]
+			return true
+		}
+		s.emitData(s.buffer[:size])
+		s.buffer = s.buffer[size:]
 		return true
 	}
 
