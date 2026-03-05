@@ -60,6 +60,77 @@ func TestVisibleWidth(t *testing.T) {
 			input:    "\x1b[38;5;214mOrange\x1b[0m",
 			expected: 6, // "Orange"
 		},
+		// Chinese characters
+		{
+			name:     "single Chinese character",
+			input:    "你",
+			expected: 2,
+		},
+		{
+			name:     "Chinese phrase",
+			input:    "你好",
+			expected: 4,
+		},
+		{
+			name:     "Chinese sentence",
+			input:    "你好世界",
+			expected: 8,
+		},
+		{
+			name:     "mixed English and Chinese",
+			input:    "Hello世界",
+			expected: 9, // "Hello" (5) + "世界" (4)
+		},
+		{
+			name:     "Chinese with ANSI codes",
+			input:    "\x1b[31m你好\x1b[0m",
+			expected: 4,
+		},
+		// Japanese characters
+		{
+			name:     "Hiragana",
+			input:    "こんにちは",
+			expected: 10, // 5 chars * 2
+		},
+		{
+			name:     "Katakana",
+			input:    "カタカナ",
+			expected: 8, // 4 chars * 2
+		},
+		// Korean characters
+		{
+			name:     "Hangul",
+			input:    "안녕하세요",
+			expected: 10, // 5 chars * 2
+		},
+		// Emoji
+		{
+			name:     "simple emoji",
+			input:    "😀",
+			expected: 2,
+		},
+		{
+			name:     "text with emoji",
+			input:    "Hello 😀",
+			expected: 8, // "Hello " (6) + emoji (2)
+		},
+		// Combining marks
+		{
+			name:     "ASCII with combining mark",
+			input:    "a\u0301", // á
+			expected: 1,
+		},
+		// Fullwidth forms
+		{
+			name:     "fullwidth A",
+			input:    "Ａ",
+			expected: 2,
+		},
+		{
+			name:     "fullwidth numbers",
+			input:    "０１２",
+			expected: 6,
+		},
 	}
 
 	for _, tt := range tests {
@@ -76,12 +147,13 @@ func TestVisibleWidthCache(t *testing.T) {
 	// Clear cache
 	widthCache = make(map[string]int)
 
-	input := "test string"
+	// Use non-ASCII string to bypass fast path
+	input := "你好世界"
 
 	// First call should calculate and cache
 	result1 := VisibleWidth(input)
-	if result1 != 11 {
-		t.Errorf("First call: VisibleWidth(%q) = %d, expected 11", input, result1)
+	if result1 != 8 {
+		t.Errorf("First call: VisibleWidth(%q) = %d, expected 8", input, result1)
 	}
 
 	// Check if cached
@@ -100,9 +172,10 @@ func TestVisibleWidthCacheEviction(t *testing.T) {
 	// Clear cache
 	widthCache = make(map[string]int)
 
-	// Fill cache to limit
+	// Fill cache to limit using non-ASCII strings (to bypass fast path)
 	for i := 0; i < widthCacheSize; i++ {
-		VisibleWidth(string(rune(i)))
+		// Use Chinese characters to ensure caching
+		VisibleWidth("你" + string(rune(i)))
 	}
 
 	initialSize := len(widthCache)
@@ -111,7 +184,7 @@ func TestVisibleWidthCacheEviction(t *testing.T) {
 	}
 
 	// Add new item, should trigger cache eviction
-	VisibleWidth("new item")
+	VisibleWidth("新项目")
 
 	// Cache should have evicted one item and added the new one
 	if len(widthCache) > widthCacheSize {

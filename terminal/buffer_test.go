@@ -19,19 +19,21 @@ func TestStdinBuffer_Process(t *testing.T) {
 
 	testCases := []struct {
 		name string
-		data string
+		data []byte
 	}{
-		{"Regular characters", "hello"},
-		{"Enter key", "\r"},
-		{"Up arrow", "\x1b[A"},
-		{"Down arrow", "\x1b[B"},
-		{"Left arrow", "\x1b[D"},
-		{"Right arrow", "\x1b[C"},
-		{"Paste content", "\x1b[200~hello world\x1b[201~"},
-		{"Tab key", "\t"},
-		{"Delete key", "\x1b[3~"},
-		{"Home key", "\x1b[H"},
-		{"End key", "\x1b[F"},
+		{"Regular characters", []byte("hello")},
+		{"Enter key", []byte("\r")},
+		{"Up arrow", []byte("\x1b[A")},
+		{"Down arrow", []byte("\x1b[B")},
+		{"Left arrow", []byte("\x1b[D")},
+		{"Right arrow", []byte("\x1b[C")},
+		{"Paste content", []byte("\x1b[200~hello world\x1b[201~")},
+		{"Tab key", []byte("\t")},
+		{"Delete key", []byte("\x1b[3~")},
+		{"Home key", []byte("\x1b[H")},
+		{"End key", []byte("\x1b[F")},
+		{"Chinese characters", []byte("你好世界")},
+		{"Mixed content", []byte("Hello 世界")},
 	}
 
 	for _, tc := range testCases {

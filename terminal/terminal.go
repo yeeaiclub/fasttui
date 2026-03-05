@@ -18,7 +18,7 @@ type ProcessTerminal struct {
 	fd                    int
 	isKittyProtocolActive bool
 	inputHandler          func(data string)
-	stdinDataBuffer       func(data string)
+	stdinDataBuffer       func(data []byte)
 	wasRaw                bool
 	resizeHandler         func()
 	resizeSignalChan      chan os.Signal
@@ -94,7 +94,8 @@ func (p *ProcessTerminal) readInputLoop() {
 				return
 			}
 			if n > 0 {
-				data := string(buf[:n])
+				data := make([]byte, n)
+				copy(data, buf[:n])
 				if p.stdinDataBuffer != nil {
 					p.stdinDataBuffer(data)
 				}
@@ -153,7 +154,7 @@ func (p *ProcessTerminal) setupStdinBuffer() {
 	}
 
 	// Handler that pipes stdin data through the buffer
-	p.stdinDataBuffer = func(data string) {
+	p.stdinDataBuffer = func(data []byte) {
 		if p.buffer != nil {
 			p.buffer.Process(data)
 		}
