@@ -1,5 +1,7 @@
 package fasttui
 
+import "github.com/clipperhouse/uax29/v2/graphemes"
+
 func SliceByColumn(line string, startCol int, length int, strict bool) string {
 	result := SliceWithWidth(line, startCol, length, strict)
 	return result.text
@@ -38,8 +40,11 @@ func SliceWithWidth(line string, startCol int, length int, strict bool) SliceRes
 		}
 
 		textPortion := line[i:textEnd]
-		for _, c := range textPortion {
-			w := 1
+		// Use grapheme segmentation for proper Unicode handling
+		g := graphemes.FromString(textPortion)
+		for g.Next() {
+			grapheme := g.Value()
+			w := GraphemeWidth(grapheme)
 			inRange := currentCol >= startCol && currentCol < endCol
 			fits := !strict || currentCol+w <= endCol
 			if inRange && fits {
@@ -47,7 +52,7 @@ func SliceWithWidth(line string, startCol int, length int, strict bool) SliceRes
 					result += pendingAnsi
 					pendingAnsi = ""
 				}
-				result += string(c)
+				result += grapheme
 				resultWidth += w
 			}
 			currentCol += w
@@ -100,15 +105,18 @@ func ExtractSegments(line string, beforeEnd int, afterStart int, afterLen int, s
 		}
 
 		textPortion := line[i:textEnd]
-		for _, c := range textPortion {
-			w := 1
+		// Use grapheme segmentation for proper Unicode handling
+		g := graphemes.FromString(textPortion)
+		for g.Next() {
+			grapheme := g.Value()
+			w := GraphemeWidth(grapheme)
 
 			if currentCol < beforeEnd {
 				if pendingAnsiBefore != "" {
 					before += pendingAnsiBefore
 					pendingAnsiBefore = ""
 				}
-				before += string(c)
+				before += grapheme
 				beforeWidth += w
 			} else if currentCol >= afterStart && currentCol < afterEnd {
 				fits := !strictAfter || currentCol+w <= afterEnd
@@ -117,7 +125,7 @@ func ExtractSegments(line string, beforeEnd int, afterStart int, afterLen int, s
 						after += pooledStyleTracker.GetActiveCodes()
 						afterStarted = true
 					}
-					after += string(c)
+					after += grapheme
 					afterWidth += w
 				}
 			}

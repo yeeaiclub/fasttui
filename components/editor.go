@@ -267,8 +267,6 @@ func (e *Editor) Render(width int) []string {
 	}
 	e.layoutWidth = layoutWidth
 
-	horizontal := e.borderColor("─")
-
 	//layout the text
 	layoutLines := e.layoutText(layoutWidth)
 
@@ -305,7 +303,7 @@ func (e *Editor) Render(width int) []string {
 	if e.scrollOffset > 0 {
 		result = append(result, e.renderBorder("↑", width, e.scrollOffset))
 	} else {
-		result = append(result, strings.Repeat(horizontal, width))
+		result = append(result, e.fillWithHorizontal(width))
 	}
 
 	for _, line := range visibleLines {
@@ -318,15 +316,21 @@ func (e *Editor) Render(width int) []string {
 			lineRenderPadding = rightPadding
 		}
 		lineRender := leftPadding + displayText + padding + lineRenderPadding
+
+		// CRITICAL: Ensure line doesn't exceed width
+		actualWidth := fasttui.VisibleWidth(lineRender)
+		if actualWidth > width {
+			lineRender = fasttui.SliceByColumn(lineRender, 0, width, true)
+		}
+
 		result = append(result, lineRender)
 	}
 
 	linesBelow := len(layoutLines) - (e.scrollOffset + len(visibleLines))
 	if linesBelow > 0 {
-		e.renderBorder("↓", width, linesBelow)
-		result = append(result, strings.Repeat(horizontal, width))
+		result = append(result, e.renderBorder("↓", width, linesBelow))
 	} else {
-		result = append(result, strings.Repeat(horizontal, width))
+		result = append(result, e.fillWithHorizontal(width))
 	}
 	return result
 }
@@ -373,11 +377,43 @@ func (e *Editor) renderLineWithCursor(line LayoutLine, contentWidth, paddingX in
 
 func (e *Editor) renderBorder(style string, width int, scrollOffset int) string {
 	indicator := fmt.Sprintf("─── %s %d more", style, scrollOffset)
-	remaining := max(width-fasttui.VisibleWidth(indicator), 0)
-	return indicator + strings.Repeat("─", remaining)
+	indicatorWidth := fasttui.VisibleWidth(indicator)
+	remaining := max(width-indicatorWidth, 0)
+
+	// Fill remaining space with horizontal line
+	result := indicator + e.fillWithHorizontal(remaining)
+
+	// Final safety check
+	if fasttui.VisibleWidth(result) > width {
+		result = fasttui.SliceByColumn(result, 0, width, true)
+	}
+
+	return result
 }
 
 const CURSOR_MARKER = "\x1b_pi:c\x07" // Not used - we render visible cursor instead
+
+// fillWithHorizontal fills the given width with horizontal line characters
+// Handles the fact that "─" is a wide character (width 2)
+func (e *Editor) fillWithHorizontal(width int) string {
+	if width <= 0 {
+		return ""
+	}
+
+	horizontal := e.borderColor("─")
+	horizontalWidth := fasttui.VisibleWidth(horizontal)
+	repeatCount := width / horizontalWidth
+
+	result := strings.Repeat(horizontal, repeatCount)
+
+	// If there's still space left (odd width), pad with a space
+	resultWidth := fasttui.VisibleWidth(result)
+	if resultWidth < width {
+		result += strings.Repeat(" ", width-resultWidth)
+	}
+
+	return result
+}
 
 func (e *Editor) IsFocused() bool {
 	return true
@@ -573,7 +609,7 @@ func (e *Editor) layoutText(contentWidth int) []LayoutLine {
 				// Find how many runes fit in contentWidth
 				for end < len(runes) {
 					r := runes[end]
-					rw := runeWidth(r)
+					rw := fasttui.GraphemeWidth(string(r))
 					if width+rw > contentWidth {
 						break
 					}
@@ -614,17 +650,6 @@ func (e *Editor) layoutText(contentWidth int) []LayoutLine {
 	}
 
 	return layoutLines
-}
-
-func runeWidth(r rune) int {
-	// Simple width calculation - can be improved with proper Unicode width library
-	if r < 32 {
-		return 0
-	}
-	if r >= 0x1100 && (r <= 0x115F || r >= 0x2E80 && r <= 0xA4CF || r >= 0xAC00 && r <= 0xD7A3 || r >= 0xF900 && r <= 0xFAFF || r >= 0xFE10 && r <= 0xFE19 || r >= 0xFE30 && r <= 0xFE6F || r >= 0xFF00 && r <= 0xFF60 || r >= 0xFFE0 && r <= 0xFFE6 || r >= 0x20000 && r <= 0x2FFFD || r >= 0x30000 && r <= 0x3FFFD) {
-		return 2
-	}
-	return 1
 }
 
 // insertTextAtCursorInternal inserts text at cursor position

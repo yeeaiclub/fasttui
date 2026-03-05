@@ -2,9 +2,10 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/yeeaiclub/fasttui"
 )
 
 // FooterComponent displays status information at the bottom of the chat
@@ -51,9 +52,11 @@ func (f *FooterComponent) Render(width int) []string {
 	pwd, _ := os.Getwd()
 	pwd = shortenPath(pwd)
 
-	// Calculate padding to right-align model
+	// Calculate padding to right-align model using visible width
 	minPadding := 2
-	availableSpace := width - len(statsLeft) - len(modelStr) - minPadding
+	statsLeftWidth := fasttui.VisibleWidth(statsLeft)
+	modelStrWidth := fasttui.VisibleWidth(modelStr)
+	availableSpace := width - statsLeftWidth - modelStrWidth - minPadding
 
 	var statsLine string
 	if availableSpace >= 0 {
@@ -61,9 +64,10 @@ func (f *FooterComponent) Render(width int) []string {
 		statsLine = statsLeft + padding + modelStr
 	} else {
 		// Not enough space, truncate model name
-		maxModelLen := width - len(statsLeft) - minPadding
+		maxModelLen := width - statsLeftWidth - minPadding
 		if maxModelLen > 3 {
-			modelStr = modelStr[:maxModelLen-3] + "..."
+			// Use fasttui.TruncateToWidth for proper Unicode handling
+			modelStr = fasttui.TruncateToWidth(modelStr, maxModelLen, "...", false)
 			padding := strings.Repeat(" ", minPadding)
 			statsLine = statsLeft + padding + modelStr
 		} else {
@@ -71,19 +75,39 @@ func (f *FooterComponent) Render(width int) []string {
 		}
 	}
 
-	// Truncate if still too long
-	if len(statsLine) > width {
-		statsLine = statsLine[:width]
+	// CRITICAL: Always truncate to exact width to prevent overflow
+	statsLineWidth := fasttui.VisibleWidth(statsLine)
+	if statsLineWidth > width {
+		statsLine = fasttui.SliceByColumn(statsLine, 0, width, true)
+	} else if statsLineWidth < width {
+		// Pad to exact width if needed
+		statsLine = statsLine + strings.Repeat(" ", width-statsLineWidth)
 	}
 
-	// Truncate pwd if needed
-	if len(pwd) > width {
+	// Truncate pwd if needed using fasttui functions
+	pwdWidth := fasttui.VisibleWidth(pwd)
+	if pwdWidth > width {
+		// Use TruncateToWidth with middle ellipsis pattern
 		half := width/2 - 2
 		if half > 0 {
-			pwd = pwd[:half] + "..." + pwd[len(pwd)-half:]
+			leftPart := fasttui.SliceByColumn(pwd, 0, half, true)
+			// Get the last 'half' columns from the end
+			rightStart := pwdWidth - half
+			if rightStart > 0 {
+				rightPart := fasttui.SliceByColumn(pwd, rightStart, half, true)
+				pwd = leftPart + "..." + rightPart
+			} else {
+				pwd = fasttui.TruncateToWidth(pwd, width, "...", false)
+			}
 		} else {
-			pwd = pwd[:width]
+			pwd = fasttui.TruncateToWidth(pwd, width, "...", false)
 		}
+	}
+
+	// CRITICAL: Ensure pwd also doesn't exceed width
+	pwdFinalWidth := fasttui.VisibleWidth(pwd)
+	if pwdFinalWidth > width {
+		pwd = fasttui.SliceByColumn(pwd, 0, width, true)
 	}
 
 	return []string{pwd, statsLine}
@@ -121,45 +145,4 @@ func shortenPath(pwd string) string {
 		return "~" + strings.TrimPrefix(pwd, home)
 	}
 	return pwd
-}
-
-// truncateToWidth truncates text to fit within width, adding ellipsis if truncated
-func truncateToWidth(text string, width int, ellipsis string) string {
-	if len(text) <= width {
-		return text
-	}
-	if width <= len(ellipsis) {
-		return text[:width]
-	}
-	return text[:width-len(ellipsis)] + ellipsis
-}
-
-// visibleWidth calculates visible width (ignoring ANSI codes)
-func visibleWidth(s string) int {
-	// Simple implementation - strip ANSI escape sequences
-	result := ""
-	inEscape := false
-	for _, ch := range s {
-		if inEscape {
-			if ch == 'm' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
-				inEscape = false
-			}
-			continue
-		}
-		if ch == '\x1b' {
-			inEscape = true
-			continue
-		}
-		result += string(ch)
-	}
-	return len(result)
-}
-
-// filepath helper
-func getDirName(path string) string {
-	base := filepath.Base(path)
-	if base == "." || base == "/" {
-		return path
-	}
-	return base
 }
