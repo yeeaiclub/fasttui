@@ -772,8 +772,6 @@ func (t *TUI) composeOverlayLine(before string, beforePad int, overlay SliceResu
 	return result.String()
 }
 
-var CURSOR_MARKER = "\x1b_pi:c\x07"
-
 var SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
 
 func (t *TUI) SetShowHardwareCursor(enabled bool) {
