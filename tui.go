@@ -21,22 +21,8 @@ type focusRequest struct {
 	component Component
 }
 
-type overlayRequest struct {
-	action    string // "show", "hide", "hideTop", "setHidden"
-	component Component
-	options   *OverlayOption
-	hidden    *bool
-	response  chan overlayResponse
-}
-
-type overlayResponse struct {
-	hide      func()
-	setHidden func(bool)
-	isHidden  func() bool
-}
-
 type queryRequest struct {
-	action   string // "hasOverlay", "getShowHardwareCursor", "getFullRedraws"
+	action   string // "getShowHardwareCursor", "getFullRedraws"
 	response chan any
 }
 
@@ -49,7 +35,6 @@ type TUI struct {
 	renderChan      chan renderRequest
 	inputChan       chan inputRequest
 	focusChan       chan focusRequest
-	overlayChan     chan overlayRequest
 	queryChan       chan queryRequest
 	stopChan        chan struct{}
 
@@ -67,7 +52,6 @@ type TUI struct {
 	cellSizeQueryPending bool
 	inputBuffer          strings.Builder
 
-	overlayStacks []Overlay
 	clearOnShrink bool
 }
 
@@ -76,10 +60,8 @@ func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 		renderChan:         make(chan renderRequest, 10),
 		inputChan:          make(chan inputRequest, 100),
 		focusChan:          make(chan focusRequest, 10),
-		overlayChan:        make(chan overlayRequest, 10),
 		queryChan:          make(chan queryRequest, 10),
 		stopChan:           make(chan struct{}),
-		overlayStacks:      make([]Overlay, 0),
 		terminal:           terminal,
 		showHardwareCursor: showHardwareCursor,
 		previousLines:      nil,
@@ -123,10 +105,6 @@ func (t *TUI) eventLoop() {
 
 		case focus := <-t.focusChan:
 			t.setFocus(focus.component)
-			pendingRender = true
-
-		case overlay := <-t.overlayChan:
-			t.handleOverlayRequest(overlay)
 			pendingRender = true
 
 		case query := <-t.queryChan:
@@ -427,11 +405,7 @@ func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, full
 }
 
 func (t *TUI) renderComponent(width int, height int) []string {
-	// render all components in container
 	newLines := t.Render(width)
-	if len(t.overlayStacks) > 0 {
-		newLines = t.compositeOverlays(newLines, width, height)
-	}
 	return newLines
 }
 
@@ -483,15 +457,6 @@ func (t *TUI) start() error {
 
 func (t *TUI) handleQueryRequest(query queryRequest) {
 	switch {
-	case query.action == "hasOverlay":
-		result := false
-		for _, entry := range t.overlayStacks {
-			if t.isOverlayVisible(&entry) {
-				result = true
-				break
-			}
-		}
-		query.response <- result
 	case query.action == "getShowHardwareCursor":
 		query.response <- t.showHardwareCursor
 	case query.action == "getFullRedraws":
@@ -508,131 +473,6 @@ func (t *TUI) handleQueryRequest(query queryRequest) {
 		enabled := strings.HasSuffix(query.action, "true")
 		t.clearOnShrink = enabled
 		close(query.response)
-	case strings.HasPrefix(query.action, "isHidden_"):
-		componentPtr := strings.TrimPrefix(query.action, "isHidden_")
-		found := false
-		for i := range t.overlayStacks {
-			if fmt.Sprintf("%p", t.overlayStacks[i].component) == componentPtr {
-				query.response <- t.overlayStacks[i].hidden
-				found = true
-				break
-			}
-		}
-		if !found {
-			query.response <- true
-		}
-	}
-}
-
-func (t *TUI) handleOverlayRequest(overlay overlayRequest) {
-	switch overlay.action {
-	case "show":
-		t.showOverlayInternal(overlay)
-	case "hide":
-		t.hideInternal(overlay.component)
-	case "hideTop":
-		t.hideOverlayInternal()
-	case "setHidden":
-		t.setHiddenInternal(overlay.component, *overlay.hidden)
-	}
-}
-
-func (t *TUI) showOverlayInternal(req overlayRequest) {
-	entryIndex := len(t.overlayStacks)
-	entry := Overlay{
-		component: req.component,
-		options:   *req.options,
-		preFocus:  t.focusedComponent,
-		hidden:    false,
-	}
-	t.overlayStacks = append(t.overlayStacks, entry)
-
-	if t.isOverlayVisible(&t.overlayStacks[entryIndex]) {
-		t.setFocus(req.component)
-	}
-	t.terminal.HideCursor()
-
-	component := req.component
-	hide := func() {
-		select {
-		case t.overlayChan <- overlayRequest{action: "hide", component: component}:
-		case <-t.stopChan:
-		}
-	}
-
-	setHidden := func(hidden bool) {
-		select {
-		case t.overlayChan <- overlayRequest{action: "setHidden", component: component, hidden: &hidden}:
-		case <-t.stopChan:
-		}
-	}
-
-	isHidden := func() bool {
-		respChan := make(chan any, 1)
-		select {
-		case t.queryChan <- queryRequest{action: "isHidden_" + fmt.Sprintf("%p", component), response: respChan}:
-			result := <-respChan
-			return result.(bool)
-		case <-t.stopChan:
-			return true
-		}
-	}
-
-	req.response <- overlayResponse{
-		hide:      hide,
-		setHidden: setHidden,
-		isHidden:  isHidden,
-	}
-}
-
-func (t *TUI) setHiddenInternal(component Component, hidden bool) {
-	index := -1
-	for i := range t.overlayStacks {
-		if t.overlayStacks[i].component == component {
-			index = i
-			break
-		}
-	}
-	if index == -1 {
-		return
-	}
-
-	if t.overlayStacks[index].hidden == hidden {
-		return
-	}
-	t.overlayStacks[index].hidden = hidden
-	if hidden {
-		if t.focusedComponent == component {
-			topVisible := t.getTopVisibleOverlay()
-			if topVisible != nil {
-				t.setFocus(topVisible.component)
-			} else {
-				t.setFocus(t.overlayStacks[index].preFocus)
-			}
-		}
-	} else {
-		if t.isOverlayVisible(&t.overlayStacks[index]) {
-			t.setFocus(component)
-		}
-	}
-}
-
-func (t *TUI) hideOverlayInternal() {
-	if len(t.overlayStacks) == 0 {
-		return
-	}
-	overlay := t.overlayStacks[len(t.overlayStacks)-1]
-	t.overlayStacks = t.overlayStacks[:len(t.overlayStacks)-1]
-
-	topVisible := t.getTopVisibleOverlay()
-	if topVisible != nil {
-		t.setFocus(topVisible.component)
-	} else {
-		t.setFocus(overlay.preFocus)
-	}
-
-	if len(t.overlayStacks) == 0 {
-		t.terminal.HideCursor()
 	}
 }
 
@@ -682,22 +522,6 @@ func (t *TUI) handleInput(data string) {
 		data = filtered
 	}
 
-	var focusedOverlay *Overlay
-	for i := range t.overlayStacks {
-		if t.overlayStacks[i].component == t.focusedComponent {
-			focusedOverlay = &t.overlayStacks[i]
-			break
-		}
-	}
-	if focusedOverlay != nil && !t.isOverlayVisible(focusedOverlay) {
-		topVisible := t.getTopVisibleOverlay()
-		if topVisible != nil {
-			t.setFocus(topVisible.component)
-		} else {
-			t.setFocus(focusedOverlay.preFocus)
-		}
-	}
-
 	if t.focusedComponent != nil {
 		if keys.IsKeyRelease(data) && !t.focusedComponent.WantsKeyRelease() {
 			return
@@ -741,221 +565,6 @@ func (t *TUI) parseCellSizeResponse() string {
 	t.inputBuffer.Reset()
 	t.cellSizeQueryPending = false
 	return result
-}
-
-func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
-	respChan := make(chan overlayResponse, 1)
-	req := overlayRequest{
-		action:    "show",
-		component: component,
-		options:   &options,
-		response:  respChan,
-	}
-
-	select {
-	case t.overlayChan <- req:
-		resp := <-respChan
-		return resp.hide, resp.setHidden, resp.isHidden
-	case <-t.stopChan:
-		noop := func() {}
-		noopBool := func(bool) {}
-		noopIsHidden := func() bool { return true }
-		return noop, noopBool, noopIsHidden
-	}
-}
-
-func (t *TUI) hideInternal(component Component) {
-	index := -1
-	for i := range t.overlayStacks {
-		if t.overlayStacks[i].component == component {
-			index = i
-			break
-		}
-	}
-	if index != -1 {
-		preFocus := t.overlayStacks[index].preFocus
-		t.overlayStacks = append(t.overlayStacks[:index], t.overlayStacks[index+1:]...)
-		if t.focusedComponent == component {
-			topVisible := t.getTopVisibleOverlay()
-			if topVisible != nil {
-				t.setFocus(topVisible.component)
-			} else {
-				t.setFocus(preFocus)
-			}
-		}
-		if len(t.overlayStacks) == 0 {
-			t.terminal.HideCursor()
-		}
-	}
-}
-
-func (t *TUI) HideOverlay() {
-	select {
-	case t.overlayChan <- overlayRequest{action: "hideTop"}:
-	case <-t.stopChan:
-	}
-}
-
-func (t *TUI) HasOverlay() bool {
-	respChan := make(chan any, 1)
-	select {
-	case t.queryChan <- queryRequest{action: "hasOverlay", response: respChan}:
-		result := <-respChan
-		return result.(bool)
-	case <-t.stopChan:
-		return false
-	}
-}
-
-// isOverlayVisible check if an overlay entry is currently visible.
-func (t *TUI) isOverlayVisible(entry *Overlay) bool {
-	if entry.hidden {
-		return false
-	}
-	if entry.options.Visible != nil {
-		width, height := t.terminal.GetSize()
-		return entry.options.Visible(width, height)
-	}
-	return true
-}
-
-// GetTopmostVisibleOverlay returns the topmost visible overlay, or nil if none.
-func (t *TUI) getTopVisibleOverlay() *Overlay {
-	for i := len(t.overlayStacks) - 1; i >= 0; i-- {
-		entry := t.overlayStacks[i]
-		if t.isOverlayVisible(&entry) {
-			return &entry
-		}
-	}
-	return nil
-}
-
-func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
-	if len(t.overlayStacks) == 0 {
-		return newLines
-	}
-
-	result := make([]string, len(newLines))
-	copy(result, newLines)
-
-	type renderedOverlay struct {
-		overlayLines []string
-		row          int
-		col          int
-		w            int
-	}
-
-	rendered := make([]renderedOverlay, 0)
-	minLinesNeeded := len(result)
-
-	for i := range t.overlayStacks {
-		entry := &t.overlayStacks[i]
-		if !t.isOverlayVisible(entry) {
-			continue
-		}
-
-		options := entry.options
-
-		layout := options.ResolveLayout(0, width, height)
-		overlayWidth := layout.width
-		component := entry.component
-		overlayLines := component.Render(overlayWidth)
-
-		if layout.maxHeight != nil && len(overlayLines) > *layout.maxHeight {
-			overlayLines = overlayLines[:*layout.maxHeight]
-		}
-
-		finalLayout := options.ResolveLayout(len(overlayLines), width, height)
-
-		rendered = append(rendered, renderedOverlay{
-			overlayLines: overlayLines,
-			row:          finalLayout.row,
-			col:          finalLayout.col,
-			w:            finalLayout.width,
-		})
-
-		if finalLayout.row+len(overlayLines) > minLinesNeeded {
-			minLinesNeeded = finalLayout.row + len(overlayLines)
-		}
-	}
-
-	workingHeight := max(t.maxLinesRendered, minLinesNeeded)
-
-	if padding := workingHeight - len(result); padding > 0 {
-		result = append(result, make([]string, padding)...)
-	}
-
-	viewportStart := max(0, workingHeight-height)
-
-	modifiedLines := make(map[int]bool)
-
-	for _, ro := range rendered {
-		for i := range ro.overlayLines {
-			idx := viewportStart + ro.row + i
-			if idx >= 0 && idx < len(result) {
-				truncatedOverlayLine := ro.overlayLines[i]
-				if VisibleWidth(ro.overlayLines[i]) > ro.w {
-					truncatedOverlayLine = SliceByColumn(ro.overlayLines[i], 0, ro.w, true)
-				}
-				result[idx] = t.compositeLineAt(result[idx], truncatedOverlayLine, ro.col, ro.w, width)
-				modifiedLines[idx] = true
-			}
-		}
-	}
-
-	for idx := range modifiedLines {
-		if VisibleWidth(result[idx]) > width {
-			result[idx] = SliceByColumn(result[idx], 0, width, true)
-		}
-	}
-
-	return result
-}
-
-func (t *TUI) compositeLineAt(baseLine string, overlayLine string, col int, overlayWidth int, termWidth int) string {
-	if containsImage(baseLine) {
-		return baseLine
-	}
-
-	// Single pass through baseLine extracts both before and after segments
-	afterStart := col + overlayWidth
-	before, beforeWidth, after, afterWidth := ExtractSegments(baseLine, col, afterStart, termWidth-afterStart, true)
-
-	// Extract overlay with width tracking (strict=true to exclude wide chars at boundary)
-	overlay := SliceWithWidth(overlayLine, 0, overlayWidth, true)
-
-	// Pad segments to target widths
-	beforePad := max(0, col-beforeWidth)
-	overlayPad := max(0, overlayWidth-overlay.width)
-	actualBeforeWidth := max(col, beforeWidth)
-	actualOverlayWidth := max(overlayWidth, overlay.width)
-	afterTarget := max(0, termWidth-actualBeforeWidth-actualOverlayWidth)
-	afterPad := max(0, afterTarget-afterWidth)
-
-	// Compose result
-	result := t.composeOverlayLine(before, beforePad, overlay, overlayPad, after, afterPad)
-
-	// CRITICAL: Always verify and truncate to terminal width.
-	// This is the final safeguard against width overflow which would crash the TUI.
-	resultWidth := VisibleWidth(result)
-	if resultWidth <= termWidth {
-		return result
-	}
-	// Truncate with strict=true to ensure we don't exceed termWidth
-	return SliceByColumn(result, 0, termWidth, true)
-}
-
-func (t *TUI) composeOverlayLine(before string, beforePad int, overlay SliceResult, overlayPad int, after string, afterPad int) string {
-	var result strings.Builder
-	result.WriteString(before)
-	result.WriteString(strings.Repeat(" ", beforePad))
-	result.WriteString(SEGMENT_RESET)
-	result.WriteString(overlay.text)
-	result.WriteString(strings.Repeat(" ", overlayPad))
-	result.WriteString(SEGMENT_RESET)
-	result.WriteString(after)
-	result.WriteString(strings.Repeat(" ", afterPad))
-	return result.String()
 }
 
 var CURSOR_MARKER = "\x1b_pi:c\x07"

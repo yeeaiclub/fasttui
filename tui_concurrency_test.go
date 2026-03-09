@@ -183,43 +183,6 @@ func TestConcurrentFocusChanges(t *testing.T) {
 	}
 }
 
-// TestConcurrentOverlayOperations tests concurrent overlay show/hide
-func TestConcurrentOverlayOperations(t *testing.T) {
-	term := &MockTerminal{}
-	tui := NewTUI(term, false)
-	tui.Start()
-	defer tui.Stop()
-
-	time.Sleep(10 * time.Millisecond)
-
-	var wg sync.WaitGroup
-	numOps := 20
-
-	for i := 0; i < numOps; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			comp := &MockComponent{}
-			hide, _, _ := tui.ShowOverlay(comp, OverlayOption{
-				Width:     50,
-				MaxHeight: 10,
-				Row:       5,
-				Col:       10,
-			})
-			time.Sleep(1 * time.Millisecond)
-			hide()
-		}()
-	}
-
-	wg.Wait()
-	time.Sleep(50 * time.Millisecond)
-
-	// Should have no overlays at the end
-	if tui.HasOverlay() {
-		t.Error("Should have no overlays after all are hidden")
-	}
-}
-
 // TestStopWhileProcessing tests stopping TUI while operations are in progress
 func TestStopWhileProcessing(t *testing.T) {
 	term := &MockTerminal{}
