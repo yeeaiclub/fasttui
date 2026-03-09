@@ -9,14 +9,49 @@ import (
 	"github.com/yeeaiclub/fasttui/keys"
 )
 
+type renderRequest struct {
+	force bool
+}
+
+type inputRequest struct {
+	data string
+}
+
+type focusRequest struct {
+	component Component
+}
+
+type overlayRequest struct {
+	action    string // "show", "hide", "hideTop", "setHidden"
+	component Component
+	options   *OverlayOption
+	hidden    *bool
+	response  chan overlayResponse
+}
+
+type overlayResponse struct {
+	hide      func()
+	setHidden func(bool)
+	isHidden  func() bool
+}
+
+type queryRequest struct {
+	action   string // "hasOverlay", "getShowHardwareCursor", "getFullRedraws"
+	response chan any
+}
+
 type TUI struct {
 	Container
 	stopped  bool
 	terminal Terminal
 
-	renderRequested bool
 	fullRedrawCount int
-	renderChan      chan struct{}
+	renderChan      chan renderRequest
+	inputChan       chan inputRequest
+	focusChan       chan focusRequest
+	overlayChan     chan overlayRequest
+	queryChan       chan queryRequest
+	stopChan        chan struct{}
 
 	previousLines       []string
 	previousWidth       int
@@ -38,7 +73,12 @@ type TUI struct {
 
 func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 	t := &TUI{
-		renderChan:         make(chan struct{}, 1),
+		renderChan:         make(chan renderRequest, 10),
+		inputChan:          make(chan inputRequest, 100),
+		focusChan:          make(chan focusRequest, 10),
+		overlayChan:        make(chan overlayRequest, 10),
+		queryChan:          make(chan queryRequest, 10),
+		stopChan:           make(chan struct{}),
 		overlayStacks:      make([]Overlay, 0),
 		terminal:           terminal,
 		showHardwareCursor: showHardwareCursor,
@@ -49,49 +89,86 @@ func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 
 func (t *TUI) Start() {
 	t.start()
-	go t.renderLoop()
-	t.doRender()
+	go t.eventLoop()
 }
 
 func (t *TUI) Stop() {
-	t.stopped = true
-	t.terminal.Stop()
+	if !t.stopped {
+		t.stopped = true
+		close(t.stopChan)
+		t.terminal.Stop()
+	}
 }
 
-func (t *TUI) renderLoop() {
-	for range t.renderChan {
-		t.renderRequested = false
-		t.doRender()
+func (t *TUI) eventLoop() {
+	pendingRender := false
+	forceRender := false
+
+	t.doRender()
+
+	for {
+		select {
+		case <-t.stopChan:
+			return
+
+		case req := <-t.renderChan:
+			if req.force {
+				forceRender = true
+			}
+			pendingRender = true
+
+		case input := <-t.inputChan:
+			t.handleInput(input.data)
+			pendingRender = true
+
+		case focus := <-t.focusChan:
+			t.setFocus(focus.component)
+			pendingRender = true
+
+		case overlay := <-t.overlayChan:
+			t.handleOverlayRequest(overlay)
+			pendingRender = true
+
+		case query := <-t.queryChan:
+			t.handleQueryRequest(query)
+		}
+
+		if pendingRender {
+			if forceRender {
+				t.forceRenderInternal()
+				forceRender = false
+			} else {
+				t.doRender()
+			}
+			pendingRender = false
+		}
 	}
 }
 
 func (t *TUI) TriggerRender() {
-	if t.renderRequested {
-		return
-	}
-	t.renderRequested = true
 	select {
-	case t.renderChan <- struct{}{}:
+	case t.renderChan <- renderRequest{force: false}:
+	case <-t.stopChan:
 	default:
 	}
 }
 
 func (t *TUI) ForceRender() {
+	select {
+	case t.renderChan <- renderRequest{force: true}:
+	case <-t.stopChan:
+	default:
+	}
+}
+
+func (t *TUI) forceRenderInternal() {
 	t.previousLines = nil
 	t.previousWidth = -1
 	t.cursorRow = 0
 	t.hardwareCursorRow = 0
 	t.maxLinesRendered = 0
 	t.previousViewportTop = 0
-
-	if t.renderRequested {
-		return
-	}
-	t.renderRequested = true
-	select {
-	case t.renderChan <- struct{}{}:
-	default:
-	}
+	t.doRender()
 }
 
 func (t *TUI) doRender() {
@@ -404,10 +481,172 @@ func (t *TUI) start() error {
 	)
 }
 
+func (t *TUI) handleQueryRequest(query queryRequest) {
+	switch {
+	case query.action == "hasOverlay":
+		result := false
+		for _, entry := range t.overlayStacks {
+			if t.isOverlayVisible(&entry) {
+				result = true
+				break
+			}
+		}
+		query.response <- result
+	case query.action == "getShowHardwareCursor":
+		query.response <- t.showHardwareCursor
+	case query.action == "getFullRedraws":
+		query.response <- t.fullRedrawCount
+	case query.action == "queryCellSize":
+		t.cellSizeQueryPending = true
+		t.terminal.Write("\x1b[16t")
+		close(query.response)
+	case strings.HasPrefix(query.action, "setShowHardwareCursor_"):
+		enabled := strings.HasSuffix(query.action, "true")
+		t.setShowHardwareCursor(enabled)
+		close(query.response)
+	case strings.HasPrefix(query.action, "setClearOnShrink_"):
+		enabled := strings.HasSuffix(query.action, "true")
+		t.clearOnShrink = enabled
+		close(query.response)
+	case strings.HasPrefix(query.action, "isHidden_"):
+		componentPtr := strings.TrimPrefix(query.action, "isHidden_")
+		found := false
+		for i := range t.overlayStacks {
+			if fmt.Sprintf("%p", t.overlayStacks[i].component) == componentPtr {
+				query.response <- t.overlayStacks[i].hidden
+				found = true
+				break
+			}
+		}
+		if !found {
+			query.response <- true
+		}
+	}
+}
+
+func (t *TUI) handleOverlayRequest(overlay overlayRequest) {
+	switch overlay.action {
+	case "show":
+		t.showOverlayInternal(overlay)
+	case "hide":
+		t.hideInternal(overlay.component)
+	case "hideTop":
+		t.hideOverlayInternal()
+	case "setHidden":
+		t.setHiddenInternal(overlay.component, *overlay.hidden)
+	}
+}
+
+func (t *TUI) showOverlayInternal(req overlayRequest) {
+	entryIndex := len(t.overlayStacks)
+	entry := Overlay{
+		component: req.component,
+		options:   *req.options,
+		preFocus:  t.focusedComponent,
+		hidden:    false,
+	}
+	t.overlayStacks = append(t.overlayStacks, entry)
+
+	if t.isOverlayVisible(&t.overlayStacks[entryIndex]) {
+		t.setFocus(req.component)
+	}
+	t.terminal.HideCursor()
+
+	component := req.component
+	hide := func() {
+		select {
+		case t.overlayChan <- overlayRequest{action: "hide", component: component}:
+		case <-t.stopChan:
+		}
+	}
+
+	setHidden := func(hidden bool) {
+		select {
+		case t.overlayChan <- overlayRequest{action: "setHidden", component: component, hidden: &hidden}:
+		case <-t.stopChan:
+		}
+	}
+
+	isHidden := func() bool {
+		respChan := make(chan any, 1)
+		select {
+		case t.queryChan <- queryRequest{action: "isHidden_" + fmt.Sprintf("%p", component), response: respChan}:
+			result := <-respChan
+			return result.(bool)
+		case <-t.stopChan:
+			return true
+		}
+	}
+
+	req.response <- overlayResponse{
+		hide:      hide,
+		setHidden: setHidden,
+		isHidden:  isHidden,
+	}
+}
+
+func (t *TUI) setHiddenInternal(component Component, hidden bool) {
+	index := -1
+	for i := range t.overlayStacks {
+		if t.overlayStacks[i].component == component {
+			index = i
+			break
+		}
+	}
+	if index == -1 {
+		return
+	}
+
+	if t.overlayStacks[index].hidden == hidden {
+		return
+	}
+	t.overlayStacks[index].hidden = hidden
+	if hidden {
+		if t.focusedComponent == component {
+			topVisible := t.getTopVisibleOverlay()
+			if topVisible != nil {
+				t.setFocus(topVisible.component)
+			} else {
+				t.setFocus(t.overlayStacks[index].preFocus)
+			}
+		}
+	} else {
+		if t.isOverlayVisible(&t.overlayStacks[index]) {
+			t.setFocus(component)
+		}
+	}
+}
+
+func (t *TUI) hideOverlayInternal() {
+	if len(t.overlayStacks) == 0 {
+		return
+	}
+	overlay := t.overlayStacks[len(t.overlayStacks)-1]
+	t.overlayStacks = t.overlayStacks[:len(t.overlayStacks)-1]
+
+	topVisible := t.getTopVisibleOverlay()
+	if topVisible != nil {
+		t.setFocus(topVisible.component)
+	} else {
+		t.setFocus(overlay.preFocus)
+	}
+
+	if len(t.overlayStacks) == 0 {
+		t.terminal.HideCursor()
+	}
+}
+
 // SetFocus sets the component that currently receives keyboard input.
 // In a TUI, only one interactive component (editor, selector, list, etc.) can receive input at a time.
 // This method switches the "input focus": first unfocus the old component, then focus the new one.
 func (t *TUI) SetFocus(component Component) {
+	select {
+	case t.focusChan <- focusRequest{component: component}:
+	case <-t.stopChan:
+	}
+}
+
+func (t *TUI) setFocus(component Component) {
 	// Unfocus the previously focused component
 	if t.focusedComponent != nil {
 		if f, ok := t.focusedComponent.(Focusable); ok {
@@ -427,6 +666,13 @@ func (t *TUI) SetFocus(component Component) {
 }
 
 func (t *TUI) HandleInput(data string) {
+	select {
+	case t.inputChan <- inputRequest{data: data}:
+	case <-t.stopChan:
+	}
+}
+
+func (t *TUI) handleInput(data string) {
 	if t.cellSizeQueryPending {
 		t.inputBuffer.WriteString(data)
 		filtered := t.parseCellSizeResponse()
@@ -446,9 +692,9 @@ func (t *TUI) HandleInput(data string) {
 	if focusedOverlay != nil && !t.isOverlayVisible(focusedOverlay) {
 		topVisible := t.getTopVisibleOverlay()
 		if topVisible != nil {
-			t.SetFocus(topVisible.component)
+			t.setFocus(topVisible.component)
 		} else {
-			t.SetFocus(focusedOverlay.preFocus)
+			t.setFocus(focusedOverlay.preFocus)
 		}
 	}
 
@@ -457,7 +703,6 @@ func (t *TUI) HandleInput(data string) {
 			return
 		}
 		t.focusedComponent.HandleInput(data)
-		t.TriggerRender()
 	}
 }
 
@@ -499,72 +744,27 @@ func (t *TUI) parseCellSizeResponse() string {
 }
 
 func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
-	entryIndex := len(t.overlayStacks)
-	entry := Overlay{
+	respChan := make(chan overlayResponse, 1)
+	req := overlayRequest{
+		action:    "show",
 		component: component,
-		options:   options,
-		preFocus:  t.focusedComponent,
-		hidden:    false,
-	}
-	t.overlayStacks = append(t.overlayStacks, entry)
-
-	if t.isOverlayVisible(&t.overlayStacks[entryIndex]) {
-		t.SetFocus(component)
-	}
-	t.terminal.HideCursor()
-	t.TriggerRender()
-
-	hide := func() {
-		t.hide(component)
+		options:   &options,
+		response:  respChan,
 	}
 
-	setHidden := func(hidden bool) {
-		// Find the entry in the slice
-		index := -1
-		for i := range t.overlayStacks {
-			if t.overlayStacks[i].component == component {
-				index = i
-				break
-			}
-		}
-		if index == -1 {
-			return
-		}
-
-		if t.overlayStacks[index].hidden == hidden {
-			return
-		}
-		t.overlayStacks[index].hidden = hidden
-		if hidden {
-			if t.focusedComponent == component {
-				topVisible := t.getTopVisibleOverlay()
-				if topVisible != nil {
-					t.SetFocus(topVisible.component)
-				} else {
-					t.SetFocus(t.overlayStacks[index].preFocus)
-				}
-			}
-		} else {
-			if t.isOverlayVisible(&t.overlayStacks[index]) {
-				t.SetFocus(component)
-			}
-		}
-		t.TriggerRender()
+	select {
+	case t.overlayChan <- req:
+		resp := <-respChan
+		return resp.hide, resp.setHidden, resp.isHidden
+	case <-t.stopChan:
+		noop := func() {}
+		noopBool := func(bool) {}
+		noopIsHidden := func() bool { return true }
+		return noop, noopBool, noopIsHidden
 	}
-
-	isHidden := func() bool {
-		for i := range t.overlayStacks {
-			if t.overlayStacks[i].component == component {
-				return t.overlayStacks[i].hidden
-			}
-		}
-		return true
-	}
-
-	return hide, setHidden, isHidden
 }
 
-func (t *TUI) hide(component Component) {
+func (t *TUI) hideInternal(component Component) {
 	index := -1
 	for i := range t.overlayStacks {
 		if t.overlayStacks[i].component == component {
@@ -578,47 +778,33 @@ func (t *TUI) hide(component Component) {
 		if t.focusedComponent == component {
 			topVisible := t.getTopVisibleOverlay()
 			if topVisible != nil {
-				t.SetFocus(topVisible.component)
+				t.setFocus(topVisible.component)
 			} else {
-				t.SetFocus(preFocus)
+				t.setFocus(preFocus)
 			}
 		}
 		if len(t.overlayStacks) == 0 {
 			t.terminal.HideCursor()
 		}
-
-		t.TriggerRender()
 	}
 }
 
 func (t *TUI) HideOverlay() {
-	if len(t.overlayStacks) == 0 {
-		return
+	select {
+	case t.overlayChan <- overlayRequest{action: "hideTop"}:
+	case <-t.stopChan:
 	}
-	overlay := t.overlayStacks[len(t.overlayStacks)-1]
-	t.overlayStacks = t.overlayStacks[:len(t.overlayStacks)-1]
-
-	// Find topmost visible overlay, or fall back to preFocus
-	topVisible := t.getTopVisibleOverlay()
-	if topVisible != nil {
-		t.SetFocus(topVisible.component)
-	} else {
-		t.SetFocus(overlay.preFocus)
-	}
-
-	if len(t.overlayStacks) == 0 {
-		t.terminal.HideCursor()
-	}
-	t.TriggerRender()
 }
 
 func (t *TUI) HasOverlay() bool {
-	for _, entry := range t.overlayStacks {
-		if t.isOverlayVisible(&entry) {
-			return true
-		}
+	respChan := make(chan any, 1)
+	select {
+	case t.queryChan <- queryRequest{action: "hasOverlay", response: respChan}:
+		result := <-respChan
+		return result.(bool)
+	case <-t.stopChan:
+		return false
 	}
-	return false
 }
 
 // isOverlayVisible check if an overlay entry is currently visible.
@@ -777,6 +963,13 @@ var CURSOR_MARKER = "\x1b_pi:c\x07"
 var SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
 
 func (t *TUI) SetShowHardwareCursor(enabled bool) {
+	select {
+	case t.queryChan <- queryRequest{action: "setShowHardwareCursor_" + fmt.Sprintf("%v", enabled), response: make(chan interface{}, 1)}:
+	case <-t.stopChan:
+	}
+}
+
+func (t *TUI) setShowHardwareCursor(enabled bool) {
 	if t.showHardwareCursor == enabled {
 		return
 	}
@@ -784,27 +977,45 @@ func (t *TUI) SetShowHardwareCursor(enabled bool) {
 	if !enabled {
 		t.terminal.HideCursor()
 	}
-	t.TriggerRender()
 }
 
 func (t *TUI) SetClearOnShrink(enabled bool) {
-	t.clearOnShrink = enabled
+	select {
+	case t.queryChan <- queryRequest{action: "setClearOnShrink_" + fmt.Sprintf("%v", enabled), response: make(chan interface{}, 1)}:
+	case <-t.stopChan:
+	}
 }
 
 func (t *TUI) QueryCellSize() {
 	if !t.terminal.IsKittyProtocolActive() {
 		return
 	}
-	t.cellSizeQueryPending = true
-	t.terminal.Write("\x1b[16t")
+	select {
+	case t.queryChan <- queryRequest{action: "queryCellSize", response: make(chan interface{}, 1)}:
+	case <-t.stopChan:
+	}
 }
 
 func (t *TUI) GetFullRedraws() int {
-	return t.fullRedrawCount
+	respChan := make(chan any, 1)
+	select {
+	case t.queryChan <- queryRequest{action: "getFullRedraws", response: respChan}:
+		result := <-respChan
+		return result.(int)
+	case <-t.stopChan:
+		return 0
+	}
 }
 
 func (t *TUI) GetShowHardwareCursor() bool {
-	return t.showHardwareCursor
+	respChan := make(chan interface{}, 1)
+	select {
+	case t.queryChan <- queryRequest{action: "getShowHardwareCursor", response: respChan}:
+		result := <-respChan
+		return result.(bool)
+	case <-t.stopChan:
+		return false
+	}
 }
 
 func (t *TUI) positionHardwareCursor(row int, col int, totalLines int) {
