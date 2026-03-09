@@ -17,39 +17,22 @@ var (
 	cellSizePartialPattern  = regexp.MustCompile(`\x1b(\[6?;?[\d;]*)?$`)
 )
 
-type renderRequest struct {
-	force bool
-}
-
-type inputRequest struct {
-	data string
-}
-
-type focusRequest struct {
-	component Component
-}
-
-type queryRequest struct {
-	action   string // "getShowHardwareCursor", "getFullRedraws"
-	response chan any
-}
-
 type TUI struct {
 	Container
 	stopped  bool
 	terminal Terminal
 
 	fullRedrawCount int
-	renderChan      chan renderRequest
-	inputChan       chan inputRequest
-	focusChan       chan focusRequest
-	queryChan       chan queryRequest
+	renderChan      chan RenderRequest
+	inputChan       chan InputRequest
+	focusChan       chan FocusRequest
+	queryChan       chan QueryRequest
 	stopChan        chan struct{}
 
-	previousLines       []string
-	previousWidth       int
-	previousViewportTop int
-	maxLinesRendered    int
+	previousLines       []string // previous rendered line contents
+	previousWidth       int      // previous terminal width
+	previousViewportTop int      // previous viewport top row number
+	maxLinesRendered    int      // max lines ever rendered (for clearing screen)
 
 	cursorRow          int
 	hardwareCursorRow  int
@@ -65,10 +48,10 @@ type TUI struct {
 
 func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 	t := &TUI{
-		renderChan:         make(chan renderRequest, 10),
-		inputChan:          make(chan inputRequest, 100),
-		focusChan:          make(chan focusRequest, 10),
-		queryChan:          make(chan queryRequest, 10),
+		renderChan:         make(chan RenderRequest, 10),
+		inputChan:          make(chan InputRequest, 100),
+		focusChan:          make(chan FocusRequest, 10),
+		queryChan:          make(chan QueryRequest, 10),
 		stopChan:           make(chan struct{}),
 		terminal:           terminal,
 		showHardwareCursor: showHardwareCursor,
@@ -87,6 +70,22 @@ func (t *TUI) Stop() {
 		t.stopped = true
 		close(t.stopChan)
 		t.terminal.Stop()
+	}
+}
+
+func (t *TUI) TriggerRender() {
+	select {
+	case t.renderChan <- RenderRequest{force: false}:
+	case <-t.stopChan:
+	default:
+	}
+}
+
+func (t *TUI) ForceRender() {
+	select {
+	case t.renderChan <- RenderRequest{force: true}:
+	case <-t.stopChan:
+	default:
 	}
 }
 
@@ -131,22 +130,6 @@ func (t *TUI) eventLoop() {
 	}
 }
 
-func (t *TUI) TriggerRender() {
-	select {
-	case t.renderChan <- renderRequest{force: false}:
-	case <-t.stopChan:
-	default:
-	}
-}
-
-func (t *TUI) ForceRender() {
-	select {
-	case t.renderChan <- renderRequest{force: true}:
-	case <-t.stopChan:
-	default:
-	}
-}
-
 func (t *TUI) forceRender() {
 	t.previousLines = nil
 	t.previousWidth = -1
@@ -177,44 +160,45 @@ func (t *TUI) doRender() {
 	newLines := t.renderComponent(width)
 	row, col := extractCursorPosition(newLines, height)
 
-	widthChanged := t.previousWidth != 0 && t.previousWidth != width
-
-	newLines = applyLineRests(newLines)
+	newLines = appendSegmentResetCodes(newLines)
 	fullRender := t.getFullRender(newLines, height, row, col, width)
+
+	widthChanged := t.previousWidth != 0 && t.previousWidth != width
 	if t.previousLines == nil && !widthChanged {
-		fullRender(false)
+		fullRender.Render(false)
 		return
 	}
 
 	if widthChanged {
-		fullRender(true)
+		fullRender.Render(true)
 		return
 	}
 
 	// Find first and last changed lines
-	firstChanged, lastChanged := findChangedLineRange(t.previousLines, newLines)
+	firstChangedIdx, lastChangedIdx := findChangedLineRange(t.previousLines, newLines)
 
-	appendedLines := len(newLines) > len(t.previousLines)
-	if appendedLines {
-		if firstChanged == -1 {
-			firstChanged = len(t.previousLines)
+	renderLinesLength := len(newLines)
+	isAppendedLines := renderLinesLength > len(t.previousLines)
+	if isAppendedLines {
+		if firstChangedIdx == -1 {
+			firstChangedIdx = len(t.previousLines)
 		}
-		lastChanged = len(newLines) - 1
+		lastChangedIdx = renderLinesLength - 1
 	}
 
 	// No changes - but still need to update hardware cursor position if it moved
-	if firstChanged == -1 {
-		t.positionHardwareCursor(row, col, len(newLines))
+	if firstChangedIdx == -1 {
+		t.moveHardwareCursorTo(row, col, renderLinesLength)
 		t.previousViewportTop = max(0, t.maxLinesRendered-height)
 		return
 	}
 
-	// All changes are in deleted lines (nothing to render, just clear)
-	if firstChanged >= len(newLines) {
-		if len(t.previousLines) > len(newLines) {
-			targetRow := max(0, len(newLines)-1)
+	// deleted lines (nothing to render, just clear)
+	if firstChangedIdx >= renderLinesLength {
+		if len(t.previousLines) > renderLinesLength {
+			targetRow := max(0, renderLinesLength-1)
 			lineDiff := computeLineDiff(targetRow)
-			extra := len(newLines) - len(t.previousLines)
+			extra := renderLinesLength - len(t.previousLines)
 			if t.clearExtraLines(lineDiff, extra, height, fullRender) {
 				return
 			}
@@ -222,7 +206,7 @@ func (t *TUI) doRender() {
 			t.hardwareCursorRow = targetRow
 		}
 
-		t.positionHardwareCursor(row, col, len(newLines))
+		t.moveHardwareCursorTo(row, col, renderLinesLength)
 		t.previousLines = newLines
 		t.previousWidth = width
 		t.previousViewportTop = max(0, t.maxLinesRendered-height)
@@ -231,14 +215,19 @@ func (t *TUI) doRender() {
 
 	// Check if firstChanged is outside the viewport
 	// Viewport is based on max lines ever rendered (terminal's working area)
-	if firstChanged < viewportTop {
+	if firstChangedIdx < viewportTop {
 		// First change is above viewport - need full re-render
-		fullRender(true)
+		fullRender.Render(true)
 		return
 	}
 
-	appendStart := appendedLines && firstChanged == len(t.previousLines) && firstChanged > 0
-	finalCursorRow := t.renderChangedLines(width, height, firstChanged, lastChanged, newLines, appendStart)
+	// appendStart is true when:
+	// - new lines were appended (appendedLines)
+	// - the first changed line is exactly at the end of previous content (firstChanged == len(t.previousLines))
+	// - there was previous content (firstChanged > 0)
+	// This means we should start rendering from the line after the previous content ends
+	appendStart := isAppendedLines && firstChangedIdx == len(t.previousLines) && firstChangedIdx > 0
+	finalCursorRow := t.renderChangedLines(width, height, firstChangedIdx, lastChangedIdx, newLines, appendStart)
 
 	// Track cursor position for next render
 	// cursorRow tracks end of content (for viewport calculation)
@@ -247,16 +236,16 @@ func (t *TUI) doRender() {
 	t.hardwareCursorRow = finalCursorRow
 
 	// Track terminal's working area (grows but doesn't shrink unless cleared)
-	t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
+	t.maxLinesRendered = max(t.maxLinesRendered, renderLinesLength)
 	t.previousViewportTop = max(0, t.maxLinesRendered-height)
 
 	// Position hardware cursor for IME
-	t.positionHardwareCursor(row, col, len(newLines))
+	t.moveHardwareCursorTo(row, col, renderLinesLength)
 	t.previousLines = newLines
 	t.previousWidth = width
 }
 
-func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, newLines []string, appendStart bool) int {
+func (t *TUI) renderChangedLines(width, height, firstChangedIdx, lastChangedIdx int, newLines []string, appendStart bool) int {
 	viewportTop := max(0, t.maxLinesRendered-height)
 	hardwareCursorRow := t.hardwareCursorRow
 	prevViewportTop := t.previousViewportTop
@@ -276,9 +265,9 @@ func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, n
 	// Used to determine if scrolling is needed when moving to a target row
 	prevViewportBottom := prevViewportTop + height - 1
 
-	moveTargetRow := firstChanged
+	moveTargetRow := firstChangedIdx
 	if appendStart {
-		moveTargetRow = firstChanged - 1
+		moveTargetRow = firstChangedIdx - 1
 	}
 
 	// If target row is below the visible area, scroll down
@@ -320,9 +309,9 @@ func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, n
 
 	// Only render changed lines (firstChanged to lastChanged), not all lines to end
 	// This reduces flicker when only a single line changes (e.g., spinner animation)
-	renderEnd := min(lastChanged, len(newLines)-1)
-	for i := firstChanged; i <= renderEnd; i++ {
-		if i > firstChanged {
+	renderEnd := min(lastChangedIdx, len(newLines)-1)
+	for i := firstChangedIdx; i <= renderEnd; i++ {
+		if i > firstChangedIdx {
 			buffer.WriteString("\r\n")
 		}
 		buffer.WriteString("\x1b[2K") // Clear current line
@@ -370,7 +359,7 @@ func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, n
 	return finalCursorRow
 }
 
-func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, fullRender func(clear bool)) bool {
+func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, fullRender FullRenderer) bool {
 	var buffer strings.Builder
 	buffer.WriteString(SyncOutputBegin)
 
@@ -388,7 +377,7 @@ func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, full
 
 	// Clear extra lines without scrolling
 	if extraLines > height {
-		fullRender(true)
+		fullRender.Render(true)
 		return true
 	}
 
@@ -417,38 +406,48 @@ func (t *TUI) renderComponent(width int) []string {
 	return newLines
 }
 
-func (t *TUI) getFullRender(newLines []string, height int, row int, col int, width int) func(clear bool) {
-	fullRender := func(clear bool) {
-		t.fullRedrawCount++
-		var buffer strings.Builder
-		buffer.WriteString(SyncOutputBegin) // Begin synchronized output
-		if clear {
-			buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
-		}
+type FullRenderer struct {
+	newLines []string
+	height   int
+	width    int
+	row      int
+	col      int
+	tui      *TUI
+}
 
-		for i := range newLines {
-			if i > 0 {
-				buffer.WriteString("\r\n")
-			}
-			buffer.WriteString(newLines[i])
-		}
-		buffer.WriteString(SyncOutputEnd) // End synchronized output
-		t.terminal.Write(buffer.String())
-
-		t.cursorRow = max(0, len(newLines)-1)
-		t.hardwareCursorRow = t.cursorRow
-		// Reset max lines when clearing, otherwise track growth
-		if clear {
-			t.maxLinesRendered = len(newLines)
-		} else {
-			t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
-		}
-		t.previousViewportTop = max(0, t.maxLinesRendered-height)
-		t.positionHardwareCursor(row, col, len(newLines))
-		t.previousLines = newLines
-		t.previousWidth = width
+func (f FullRenderer) Render(clear bool) {
+	var buffer strings.Builder
+	buffer.WriteString(SyncOutputBegin) // Begin synchronized output
+	if clear {
+		buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
 	}
-	return fullRender
+	buffer.WriteString(strings.Join(f.newLines, "\r\n"))
+	buffer.WriteString(SyncOutputEnd) // End synchronized output
+	f.tui.terminal.Write(buffer.String())
+
+	f.tui.cursorRow = max(0, len(f.newLines)-1)
+	f.tui.hardwareCursorRow = f.tui.cursorRow
+
+	if clear {
+		f.tui.maxLinesRendered = len(f.newLines)
+	} else {
+		f.tui.maxLinesRendered = max(f.tui.maxLinesRendered, len(f.newLines))
+	}
+	f.tui.previousViewportTop = max(0, f.tui.maxLinesRendered-f.height)
+	f.tui.moveHardwareCursorTo(f.row, f.col, f.height)
+	f.tui.previousLines = f.newLines
+	f.tui.previousWidth = f.width
+}
+
+func (t *TUI) getFullRender(newLines []string, height int, row int, col int, width int) FullRenderer {
+	return FullRenderer{
+		newLines: newLines,
+		height:   height,
+		width:    width,
+		row:      row,
+		col:      col,
+		tui:      t,
+	}
 }
 
 func (t *TUI) start() error {
@@ -463,7 +462,7 @@ func (t *TUI) start() error {
 	)
 }
 
-func (t *TUI) handleQueryRequest(query queryRequest) {
+func (t *TUI) handleQueryRequest(query QueryRequest) {
 	switch {
 	case query.action == "getShowHardwareCursor":
 		query.response <- t.showHardwareCursor
@@ -489,7 +488,7 @@ func (t *TUI) handleQueryRequest(query queryRequest) {
 // This method switches the "input focus": first unfocus the old component, then focus the new one.
 func (t *TUI) SetFocus(component Component) {
 	select {
-	case t.focusChan <- focusRequest{component: component}:
+	case t.focusChan <- FocusRequest{component: component}:
 	case <-t.stopChan:
 	}
 }
@@ -515,7 +514,7 @@ func (t *TUI) setFocus(component Component) {
 
 func (t *TUI) HandleInput(data string) {
 	select {
-	case t.inputChan <- inputRequest{data: data}:
+	case t.inputChan <- InputRequest{data: data}:
 	case <-t.stopChan:
 	}
 }
@@ -575,7 +574,7 @@ var SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
 
 func (t *TUI) SetShowHardwareCursor(enabled bool) {
 	select {
-	case t.queryChan <- queryRequest{action: "setShowHardwareCursor_" + fmt.Sprintf("%v", enabled), response: make(chan interface{}, 1)}:
+	case t.queryChan <- QueryRequest{action: "setShowHardwareCursor_" + fmt.Sprintf("%v", enabled), response: make(chan interface{}, 1)}:
 	case <-t.stopChan:
 	}
 }
@@ -592,7 +591,7 @@ func (t *TUI) setShowHardwareCursor(enabled bool) {
 
 func (t *TUI) SetClearOnShrink(enabled bool) {
 	select {
-	case t.queryChan <- queryRequest{action: "setClearOnShrink_" + fmt.Sprintf("%v", enabled), response: make(chan interface{}, 1)}:
+	case t.queryChan <- QueryRequest{action: "setClearOnShrink_" + fmt.Sprintf("%v", enabled), response: make(chan interface{}, 1)}:
 	case <-t.stopChan:
 	}
 }
@@ -602,7 +601,7 @@ func (t *TUI) QueryCellSize() {
 		return
 	}
 	select {
-	case t.queryChan <- queryRequest{action: "queryCellSize", response: make(chan any, 1)}:
+	case t.queryChan <- QueryRequest{action: "queryCellSize", response: make(chan any, 1)}:
 	case <-t.stopChan:
 	}
 }
@@ -610,7 +609,7 @@ func (t *TUI) QueryCellSize() {
 func (t *TUI) GetFullRedraws() int {
 	respChan := make(chan any, 1)
 	select {
-	case t.queryChan <- queryRequest{action: "getFullRedraws", response: respChan}:
+	case t.queryChan <- QueryRequest{action: "getFullRedraws", response: respChan}:
 		result := <-respChan
 		return result.(int)
 	case <-t.stopChan:
@@ -621,7 +620,7 @@ func (t *TUI) GetFullRedraws() int {
 func (t *TUI) GetShowHardwareCursor() bool {
 	respChan := make(chan any, 1)
 	select {
-	case t.queryChan <- queryRequest{action: "getShowHardwareCursor", response: respChan}:
+	case t.queryChan <- QueryRequest{action: "getShowHardwareCursor", response: respChan}:
 		result := <-respChan
 		return result.(bool)
 	case <-t.stopChan:
@@ -629,7 +628,14 @@ func (t *TUI) GetShowHardwareCursor() bool {
 	}
 }
 
-func (t *TUI) positionHardwareCursor(row int, col int, totalLines int) {
+// moveHardwareCursorTo moves the hardware cursor to the specified position.
+// If row or col is negative, the cursor will be hidden.
+//
+// Parameters:
+//   - row: target row index (0-based), -1 means no valid position
+//   - col: target column index (0-based), -1 means no valid position
+//   - totalLines: total number of lines in the viewport (for bounds checking)
+func (t *TUI) moveHardwareCursorTo(row int, col int, totalLines int) {
 	// Check if no cursor position was found (row == -1, col == -1)
 	if (row < 0 || col < 0) || totalLines <= 0 {
 		t.terminal.HideCursor()

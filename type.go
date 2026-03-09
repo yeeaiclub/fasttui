@@ -28,8 +28,19 @@ type Focusable interface {
 	IsFocused() bool
 }
 
-type OverlayHandle interface {
-	Hide()
-	SetHidden(hidden bool)
-	isHidden() bool
+type RenderRequest struct {
+	force bool
+}
+
+type InputRequest struct {
+	data string
+}
+
+type FocusRequest struct {
+	component Component
+}
+
+type QueryRequest struct {
+	action   string // "getShowHardwareCursor", "getFullRedraws"
+	response chan any
 }
