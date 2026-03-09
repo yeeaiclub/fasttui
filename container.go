@@ -1,6 +1,9 @@
 package fasttui
 
+import "sync"
+
 type Container struct {
+	mu       sync.RWMutex
 	children []Component
 }
 
@@ -9,10 +12,14 @@ func NewContainer() *Container {
 }
 
 func (c *Container) AddChild(component Component) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.children = append(c.children, component)
 }
 
 func (c *Container) RemoveChild(component Component) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for i, child := range c.children {
 		if child == component {
 			c.children = append(c.children[:i], c.children[i+1:]...)
@@ -22,16 +29,22 @@ func (c *Container) RemoveChild(component Component) {
 }
 
 func (c *Container) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.children = []Component{}
 }
 
 func (c *Container) Invalidate() {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	for _, child := range c.children {
 		child.Invalidate()
 	}
 }
 
 func (c *Container) Render(width int) []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	var lines []string
 	for _, child := range c.children {
 		lines = append(lines, child.Render(width)...)
@@ -40,7 +53,6 @@ func (c *Container) Render(width int) []string {
 }
 
 func (c *Container) HandleInput(data string) {
-	// 容器本身不处理输入，可由具体实现覆盖
 }
 
 func (c *Container) WantsKeyRelease() bool {
@@ -48,16 +60,22 @@ func (c *Container) WantsKeyRelease() bool {
 }
 
 func (c *Container) GetChildren() []Component {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.children
 }
 
 func (c *Container) RemoveChildAt(index int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if index >= 0 && index < len(c.children) {
 		c.children = append(c.children[:index], c.children[index+1:]...)
 	}
 }
 
 func (c *Container) InsertChildAt(index int, component Component) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if index < 0 {
 		index = 0
 	}

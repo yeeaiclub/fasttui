@@ -192,7 +192,7 @@ func TestStopWhileProcessing(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Start many operations
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		go tui.TriggerRender()
 		go tui.HandleInput("x")
 	}
@@ -277,7 +277,7 @@ func TestConcurrentContainerMixedOps(t *testing.T) {
 	numOps := 30
 
 	// Concurrent mixed operations
-	for i := 0; i < numOps; i++ {
+	for i := range numOps {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()

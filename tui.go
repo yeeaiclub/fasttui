@@ -9,6 +9,14 @@ import (
 	"github.com/yeeaiclub/fasttui/keys"
 )
 
+var (
+	SyncOutputBegin = "\x1b[?2026h"
+	SyncOutputEnd   = "\x1b[?2026l"
+
+	cellSizeResponsePattern = regexp.MustCompile(`\x1b\[6;(\d+);(\d+)t`)
+	cellSizePartialPattern  = regexp.MustCompile(`\x1b(\[6?;?[\d;]*)?$`)
+)
+
 type renderRequest struct {
 	force bool
 }
@@ -113,7 +121,7 @@ func (t *TUI) eventLoop() {
 
 		if pendingRender {
 			if forceRender {
-				t.forceRenderInternal()
+				t.forceRender()
 				forceRender = false
 			} else {
 				t.doRender()
@@ -139,7 +147,7 @@ func (t *TUI) ForceRender() {
 	}
 }
 
-func (t *TUI) forceRenderInternal() {
+func (t *TUI) forceRender() {
 	t.previousLines = nil
 	t.previousWidth = -1
 	t.cursorRow = 0
@@ -166,7 +174,7 @@ func (t *TUI) doRender() {
 		return ct - cs
 	}
 
-	newLines := t.renderComponent(width, height)
+	newLines := t.renderComponent(width)
 	row, col := extractCursorPosition(newLines, height)
 
 	widthChanged := t.previousWidth != 0 && t.previousWidth != width
@@ -262,7 +270,7 @@ func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, n
 	// Render from first changed line to end
 	// Build buffer with all updates wrapped in synchronized output
 	var buffer strings.Builder
-	buffer.WriteString("\x1b[?2026h") // Begin synchronized output
+	buffer.WriteString(SyncOutputBegin) // Begin synchronized output
 
 	// Calculate the bottom row index of the previous viewport
 	// Used to determine if scrolling is needed when moving to a target row
@@ -355,7 +363,7 @@ func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, n
 		buffer.WriteString("A")
 	}
 
-	buffer.WriteString("\x1b[?2026l") // End synchronized output
+	buffer.WriteString(SyncOutputEnd) // End synchronized output
 
 	// Write entire buffer at once
 	t.terminal.Write(buffer.String())
@@ -364,7 +372,7 @@ func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, n
 
 func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, fullRender func(clear bool)) bool {
 	var buffer strings.Builder
-	buffer.WriteString("\x1b[?2026h")
+	buffer.WriteString(SyncOutputBegin)
 
 	// Move to end of new content (clamp to 0 for empty content)
 	if cursorOffset > 0 {
@@ -399,12 +407,12 @@ func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, full
 		buffer.WriteString("A")
 	}
 
-	buffer.WriteString("\x1b[?2026l")
+	buffer.WriteString(SyncOutputEnd)
 	t.terminal.Write(buffer.String())
 	return false
 }
 
-func (t *TUI) renderComponent(width int, height int) []string {
+func (t *TUI) renderComponent(width int) []string {
 	newLines := t.Render(width)
 	return newLines
 }
@@ -413,7 +421,7 @@ func (t *TUI) getFullRender(newLines []string, height int, row int, col int, wid
 	fullRender := func(clear bool) {
 		t.fullRedrawCount++
 		var buffer strings.Builder
-		buffer.WriteString("\x1b[?2026h") // Begin synchronized output
+		buffer.WriteString(SyncOutputBegin) // Begin synchronized output
 		if clear {
 			buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
 		}
@@ -424,7 +432,7 @@ func (t *TUI) getFullRender(newLines []string, height int, row int, col int, wid
 			}
 			buffer.WriteString(newLines[i])
 		}
-		buffer.WriteString("\x1b[?2026l") // End synchronized output
+		buffer.WriteString(SyncOutputEnd) // End synchronized output
 		t.terminal.Write(buffer.String())
 
 		t.cursorRow = max(0, len(newLines)-1)
@@ -533,9 +541,7 @@ func (t *TUI) handleInput(data string) {
 func (t *TUI) parseCellSizeResponse() string {
 	data := t.inputBuffer.String()
 
-	responsePattern := `\x1b\[6;(\d+);(\d+)t`
-	re := regexp.MustCompile(responsePattern)
-	matches := re.FindStringSubmatch(data)
+	matches := cellSizeResponsePattern.FindStringSubmatch(data)
 
 	if len(matches) == 3 {
 		heightPx, err1 := strconv.Atoi(matches[1])
@@ -550,9 +556,7 @@ func (t *TUI) parseCellSizeResponse() string {
 		}
 	}
 
-	partialPattern := `\x1b(\[6?;?[\d;]*)?$`
-	rePartial := regexp.MustCompile(partialPattern)
-	if rePartial.MatchString(data) {
+	if cellSizePartialPattern.MatchString(data) {
 		if len(data) > 0 {
 			lastChar := data[len(data)-1]
 			if !((lastChar >= 'a' && lastChar <= 'z') || (lastChar >= 'A' && lastChar <= 'Z') || lastChar == '~') {
@@ -566,8 +570,6 @@ func (t *TUI) parseCellSizeResponse() string {
 	t.cellSizeQueryPending = false
 	return result
 }
-
-var CURSOR_MARKER = "\x1b_pi:c\x07"
 
 var SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
 
@@ -600,7 +602,7 @@ func (t *TUI) QueryCellSize() {
 		return
 	}
 	select {
-	case t.queryChan <- queryRequest{action: "queryCellSize", response: make(chan interface{}, 1)}:
+	case t.queryChan <- queryRequest{action: "queryCellSize", response: make(chan any, 1)}:
 	case <-t.stopChan:
 	}
 }
@@ -617,7 +619,7 @@ func (t *TUI) GetFullRedraws() int {
 }
 
 func (t *TUI) GetShowHardwareCursor() bool {
-	respChan := make(chan interface{}, 1)
+	respChan := make(chan any, 1)
 	select {
 	case t.queryChan <- queryRequest{action: "getShowHardwareCursor", response: respChan}:
 		result := <-respChan
