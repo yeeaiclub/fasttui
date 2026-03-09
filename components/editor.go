@@ -5,9 +5,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/yeeaiclub/fasttui/keys"
-
 	"github.com/yeeaiclub/fasttui"
+	"github.com/yeeaiclub/fasttui/keys"
 )
 
 type Editor struct {
@@ -568,6 +567,54 @@ type LayoutLine struct {
 	CursorPos int
 }
 
+func wrapLine(line string, contentWidth int, cursorCol int, hasCursor bool) []LayoutLine {
+	runes := []rune(line)
+	var layoutLines []LayoutLine
+
+	cursorRunePos := 0
+	if hasCursor {
+		cursorRunePos = len([]rune(line[:min(cursorCol, len(line))]))
+	}
+
+	start := 0
+	for start < len(runes) {
+		end := start
+		width := 0
+
+		for end < len(runes) {
+			rw := fasttui.GraphemeWidth(string(runes[end]))
+			if width+rw > contentWidth {
+				break
+			}
+			width += rw
+			end++
+		}
+
+		if end == start && start < len(runes) {
+			end = start + 1
+		}
+
+		chunk := string(runes[start:end])
+
+		lineHasCursor := false
+		cursorPos := 0
+		if hasCursor && cursorRunePos >= start && cursorRunePos <= end {
+			lineHasCursor = true
+			cursorPos = len(string(runes[start:min(cursorRunePos, end)]))
+		}
+
+		layoutLines = append(layoutLines, LayoutLine{
+			Text:      chunk,
+			HasCursor: lineHasCursor,
+			CursorPos: cursorPos,
+		})
+
+		start = end
+	}
+
+	return layoutLines
+}
+
 func (e *Editor) layoutText(contentWidth int) []LayoutLine {
 	var layoutLines []LayoutLine
 
@@ -587,7 +634,6 @@ func (e *Editor) layoutText(contentWidth int) []LayoutLine {
 		lineVisibleWidth := fasttui.VisibleWidth(line)
 
 		if lineVisibleWidth <= contentWidth {
-			// Line fits in one layout line
 			cursorPos := 0
 			if isCurrentLine {
 				cursorPos = min(e.state.cursorCol, len(line))
@@ -598,54 +644,8 @@ func (e *Editor) layoutText(contentWidth int) []LayoutLine {
 				CursorPos: cursorPos,
 			})
 		} else {
-			// Line needs wrapping - character-based wrapping
-			runes := []rune(line)
-			start := 0
-
-			for start < len(runes) {
-				end := start
-				width := 0
-
-				// Find how many runes fit in contentWidth
-				for end < len(runes) {
-					r := runes[end]
-					rw := fasttui.GraphemeWidth(string(r))
-					if width+rw > contentWidth {
-						break
-					}
-					width += rw
-					end++
-				}
-
-				// Ensure we make progress
-				if end == start && start < len(runes) {
-					end = start + 1
-				}
-
-				chunk := string(runes[start:end])
-
-				// Determine if cursor is in this chunk
-				hasCursor := false
-				cursorPos := 0
-				if isCurrentLine {
-					// Cursor position in runes
-					cursorRunePos := len([]rune(line[:min(e.state.cursorCol, len(line))]))
-
-					if cursorRunePos >= start && cursorRunePos <= end {
-						hasCursor = true
-						// Calculate byte position within chunk
-						cursorPos = len(string(runes[start:min(cursorRunePos, end)]))
-					}
-				}
-
-				layoutLines = append(layoutLines, LayoutLine{
-					Text:      chunk,
-					HasCursor: hasCursor,
-					CursorPos: cursorPos,
-				})
-
-				start = end
-			}
+			wrapped := wrapLine(line, contentWidth, e.state.cursorCol, isCurrentLine)
+			layoutLines = append(layoutLines, wrapped...)
 		}
 	}
 
