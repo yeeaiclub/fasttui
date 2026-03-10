@@ -48,7 +48,7 @@ func (k *KeyLogger) HandleInput(data string) {
 	}
 
 	// Request re-render to show the new log entry
-	k.tui.RequestRender(false)
+	k.tui.ForceRender()
 }
 
 func (k *KeyLogger) WantsKeyRelease() bool {
