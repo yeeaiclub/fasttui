@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strconv"
+
 	"github.com/yeeaiclub/fasttui"
 	"github.com/yeeaiclub/fasttui/components"
 	"github.com/yeeaiclub/fasttui/keys"
@@ -52,7 +54,7 @@ func NewExtensionSelectorComponent(
 			opts.Timeout,
 			opts.TUI,
 			func(s int) {
-				titleWithTimer := e.baseTitle + " (" + intToStr(s) + "s)"
+				titleWithTimer := e.baseTitle + " (" + strconv.Itoa(s) + "s)"
 				e.titleText.SetText(ThemeFg("accent", titleWithTimer))
 			},
 			onCancel,
@@ -62,16 +64,7 @@ func NewExtensionSelectorComponent(
 	e.listContainer = fasttui.NewContainer()
 	e.AddChild(e.listContainer)
 	e.AddChild(components.NewSpacer(1))
-
-	helpText := RawKeyHint("↑↓", "navigate") +
-		"  " +
-		KeyHint("selectConfirm", "select") +
-		"  " +
-		KeyHint("selectCancel", "cancel")
-	e.AddChild(components.NewText(helpText, 1, 0, nil))
-	e.AddChild(components.NewSpacer(1))
 	e.AddChild(components.NewDynamicBorder(nil))
-
 	e.updateList()
 	return e
 }
@@ -114,23 +107,4 @@ func (e *ExtensionSelectorComponent) Dispose() {
 	if e.countdown != nil {
 		e.countdown.Dispose()
 	}
-}
-
-func intToStr(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var result []byte
-	negative := n < 0
-	if negative {
-		n = -n
-	}
-	for n > 0 {
-		result = append([]byte{byte('0' + n%10)}, result...)
-		n /= 10
-	}
-	if negative {
-		result = append([]byte{'-'}, result...)
-	}
-	return string(result)
 }

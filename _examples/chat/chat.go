@@ -172,7 +172,7 @@ func (app *ChatApp) handleSubmit(value string) {
 		app.isResponding = true
 		app.addUserMessage(value)
 		loader := app.addLoader()
-		app.simulateResponse(loader)
+		go app.simulateResponse(loader)
 	}
 }
 

@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [unreleased]
+
+### Removed
+
+- **Remove overlay functionality and related tests**
+  - Deleted overlay.go file and removed overlay-related code from tui.go
+  - Removed associated test case in tui_concurrency_test.go
+  - Overlay feature is no longer needed in the current architecture
+  - Note: Overlay functionality will be re-implemented in a future version with improved architecture
+
+## [V0.1.1]
 
 ### Fixed
 

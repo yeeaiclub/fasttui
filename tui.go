@@ -9,19 +9,30 @@ import (
 	"github.com/yeeaiclub/fasttui/keys"
 )
 
+var (
+	SyncOutputBegin = "\x1b[?2026h"
+	SyncOutputEnd   = "\x1b[?2026l"
+
+	cellSizeResponsePattern = regexp.MustCompile(`\x1b\[6;(\d+);(\d+)t`)
+	cellSizePartialPattern  = regexp.MustCompile(`\x1b(\[6?;?[\d;]*)?$`)
+)
+
 type TUI struct {
 	Container
 	stopped  bool
 	terminal Terminal
 
-	renderRequested bool
 	fullRedrawCount int
-	renderChan      chan struct{}
+	renderChan      chan RenderRequest
+	inputChan       chan InputRequest
+	focusChan       chan FocusRequest
+	queryChan       chan QueryRequest
+	stopChan        chan struct{}
 
-	previousLines       []string
-	previousWidth       int
-	previousViewportTop int
-	maxLinesRendered    int
+	previousLines       []string // previous rendered line contents
+	previousWidth       int      // previous terminal width
+	previousViewportTop int      // previous viewport top row number
+	maxLinesRendered    int      // max lines ever rendered (for clearing screen)
 
 	cursorRow          int
 	hardwareCursorRow  int
@@ -32,14 +43,16 @@ type TUI struct {
 	cellSizeQueryPending bool
 	inputBuffer          strings.Builder
 
-	overlayStacks []Overlay
 	clearOnShrink bool
 }
 
 func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 	t := &TUI{
-		renderChan:         make(chan struct{}, 1),
-		overlayStacks:      make([]Overlay, 0),
+		renderChan:         make(chan RenderRequest, 10),
+		inputChan:          make(chan InputRequest, 100),
+		focusChan:          make(chan FocusRequest, 10),
+		queryChan:          make(chan QueryRequest, 10),
+		stopChan:           make(chan struct{}),
 		terminal:           terminal,
 		showHardwareCursor: showHardwareCursor,
 		previousLines:      nil,
@@ -49,49 +62,82 @@ func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 
 func (t *TUI) Start() {
 	t.start()
-	go t.renderLoop()
-	t.doRender()
+	go t.eventLoop()
 }
 
 func (t *TUI) Stop() {
-	t.stopped = true
-	t.terminal.Stop()
-}
-
-func (t *TUI) renderLoop() {
-	for range t.renderChan {
-		t.renderRequested = false
-		t.doRender()
+	if !t.stopped {
+		t.stopped = true
+		close(t.stopChan)
+		t.terminal.Stop()
 	}
 }
 
 func (t *TUI) TriggerRender() {
-	if t.renderRequested {
-		return
-	}
-	t.renderRequested = true
 	select {
-	case t.renderChan <- struct{}{}:
+	case t.renderChan <- RenderRequest{force: false}:
+	case <-t.stopChan:
 	default:
 	}
 }
 
 func (t *TUI) ForceRender() {
+	select {
+	case t.renderChan <- RenderRequest{force: true}:
+	case <-t.stopChan:
+	default:
+	}
+}
+
+func (t *TUI) eventLoop() {
+	pendingRender := false
+	forceRender := false
+
+	t.doRender()
+
+	for {
+		select {
+		case <-t.stopChan:
+			return
+
+		case req := <-t.renderChan:
+			if req.force {
+				forceRender = true
+			}
+			pendingRender = true
+
+		case input := <-t.inputChan:
+			t.handleInput(input.data)
+			pendingRender = true
+
+		case focus := <-t.focusChan:
+			t.setFocus(focus.component)
+			pendingRender = true
+
+		case query := <-t.queryChan:
+			t.handleQueryRequest(query)
+		}
+
+		if pendingRender {
+			if forceRender {
+				t.forceRender()
+				forceRender = false
+			} else {
+				t.doRender()
+			}
+			pendingRender = false
+		}
+	}
+}
+
+func (t *TUI) forceRender() {
 	t.previousLines = nil
 	t.previousWidth = -1
 	t.cursorRow = 0
 	t.hardwareCursorRow = 0
 	t.maxLinesRendered = 0
 	t.previousViewportTop = 0
-
-	if t.renderRequested {
-		return
-	}
-	t.renderRequested = true
-	select {
-	case t.renderChan <- struct{}{}:
-	default:
-	}
+	t.doRender()
 }
 
 func (t *TUI) doRender() {
@@ -111,47 +157,48 @@ func (t *TUI) doRender() {
 		return ct - cs
 	}
 
-	newLines := t.renderComponent(width, height)
+	newLines := t.renderComponent(width)
 	row, col := extractCursorPosition(newLines, height)
 
-	widthChanged := t.previousWidth != 0 && t.previousWidth != width
-
-	newLines = applyLineRests(newLines)
+	newLines = appendSegmentResetCodes(newLines)
 	fullRender := t.getFullRender(newLines, height, row, col, width)
+
+	widthChanged := t.previousWidth != 0 && t.previousWidth != width
 	if t.previousLines == nil && !widthChanged {
-		fullRender(false)
+		fullRender.Render(false)
 		return
 	}
 
 	if widthChanged {
-		fullRender(true)
+		fullRender.Render(true)
 		return
 	}
 
 	// Find first and last changed lines
-	firstChanged, lastChanged := findChangedLineRange(t.previousLines, newLines)
+	firstChangedIdx, lastChangedIdx := findChangedLineRange(t.previousLines, newLines)
 
-	appendedLines := len(newLines) > len(t.previousLines)
-	if appendedLines {
-		if firstChanged == -1 {
-			firstChanged = len(t.previousLines)
+	renderLinesLength := len(newLines)
+	isAppendedLines := renderLinesLength > len(t.previousLines)
+	if isAppendedLines {
+		if firstChangedIdx == -1 {
+			firstChangedIdx = len(t.previousLines)
 		}
-		lastChanged = len(newLines) - 1
+		lastChangedIdx = renderLinesLength - 1
 	}
 
 	// No changes - but still need to update hardware cursor position if it moved
-	if firstChanged == -1 {
-		t.positionHardwareCursor(row, col, len(newLines))
+	if firstChangedIdx == -1 {
+		t.moveHardwareCursorTo(row, col, renderLinesLength)
 		t.previousViewportTop = max(0, t.maxLinesRendered-height)
 		return
 	}
 
-	// All changes are in deleted lines (nothing to render, just clear)
-	if firstChanged >= len(newLines) {
-		if len(t.previousLines) > len(newLines) {
-			targetRow := max(0, len(newLines)-1)
+	// deleted lines (nothing to render, just clear)
+	if firstChangedIdx >= renderLinesLength {
+		if len(t.previousLines) > renderLinesLength {
+			targetRow := max(0, renderLinesLength-1)
 			lineDiff := computeLineDiff(targetRow)
-			extra := len(newLines) - len(t.previousLines)
+			extra := renderLinesLength - len(t.previousLines)
 			if t.clearExtraLines(lineDiff, extra, height, fullRender) {
 				return
 			}
@@ -159,7 +206,7 @@ func (t *TUI) doRender() {
 			t.hardwareCursorRow = targetRow
 		}
 
-		t.positionHardwareCursor(row, col, len(newLines))
+		t.moveHardwareCursorTo(row, col, renderLinesLength)
 		t.previousLines = newLines
 		t.previousWidth = width
 		t.previousViewportTop = max(0, t.maxLinesRendered-height)
@@ -168,14 +215,19 @@ func (t *TUI) doRender() {
 
 	// Check if firstChanged is outside the viewport
 	// Viewport is based on max lines ever rendered (terminal's working area)
-	if firstChanged < viewportTop {
+	if firstChangedIdx < viewportTop {
 		// First change is above viewport - need full re-render
-		fullRender(true)
+		fullRender.Render(true)
 		return
 	}
 
-	appendStart := appendedLines && firstChanged == len(t.previousLines) && firstChanged > 0
-	finalCursorRow := t.renderChangedLines(width, height, firstChanged, lastChanged, newLines, appendStart)
+	// appendStart is true when:
+	// - new lines were appended (appendedLines)
+	// - the first changed line is exactly at the end of previous content (firstChanged == len(t.previousLines))
+	// - there was previous content (firstChanged > 0)
+	// This means we should start rendering from the line after the previous content ends
+	appendStart := isAppendedLines && firstChangedIdx == len(t.previousLines) && firstChangedIdx > 0
+	finalCursorRow := t.renderChangedLines(width, height, firstChangedIdx, lastChangedIdx, newLines, appendStart)
 
 	// Track cursor position for next render
 	// cursorRow tracks end of content (for viewport calculation)
@@ -184,16 +236,16 @@ func (t *TUI) doRender() {
 	t.hardwareCursorRow = finalCursorRow
 
 	// Track terminal's working area (grows but doesn't shrink unless cleared)
-	t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
+	t.maxLinesRendered = max(t.maxLinesRendered, renderLinesLength)
 	t.previousViewportTop = max(0, t.maxLinesRendered-height)
 
 	// Position hardware cursor for IME
-	t.positionHardwareCursor(row, col, len(newLines))
+	t.moveHardwareCursorTo(row, col, renderLinesLength)
 	t.previousLines = newLines
 	t.previousWidth = width
 }
 
-func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, newLines []string, appendStart bool) int {
+func (t *TUI) renderChangedLines(width, height, firstChangedIdx, lastChangedIdx int, newLines []string, appendStart bool) int {
 	viewportTop := max(0, t.maxLinesRendered-height)
 	hardwareCursorRow := t.hardwareCursorRow
 	prevViewportTop := t.previousViewportTop
@@ -207,15 +259,15 @@ func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, n
 	// Render from first changed line to end
 	// Build buffer with all updates wrapped in synchronized output
 	var buffer strings.Builder
-	buffer.WriteString("\x1b[?2026h") // Begin synchronized output
+	buffer.WriteString(SyncOutputBegin) // Begin synchronized output
 
 	// Calculate the bottom row index of the previous viewport
 	// Used to determine if scrolling is needed when moving to a target row
 	prevViewportBottom := prevViewportTop + height - 1
 
-	moveTargetRow := firstChanged
+	moveTargetRow := firstChangedIdx
 	if appendStart {
-		moveTargetRow = firstChanged - 1
+		moveTargetRow = firstChangedIdx - 1
 	}
 
 	// If target row is below the visible area, scroll down
@@ -257,9 +309,9 @@ func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, n
 
 	// Only render changed lines (firstChanged to lastChanged), not all lines to end
 	// This reduces flicker when only a single line changes (e.g., spinner animation)
-	renderEnd := min(lastChanged, len(newLines)-1)
-	for i := firstChanged; i <= renderEnd; i++ {
-		if i > firstChanged {
+	renderEnd := min(lastChangedIdx, len(newLines)-1)
+	for i := firstChangedIdx; i <= renderEnd; i++ {
+		if i > firstChangedIdx {
 			buffer.WriteString("\r\n")
 		}
 		buffer.WriteString("\x1b[2K") // Clear current line
@@ -300,16 +352,16 @@ func (t *TUI) renderChangedLines(width, height, firstChanged, lastChanged int, n
 		buffer.WriteString("A")
 	}
 
-	buffer.WriteString("\x1b[?2026l") // End synchronized output
+	buffer.WriteString(SyncOutputEnd) // End synchronized output
 
 	// Write entire buffer at once
 	t.terminal.Write(buffer.String())
 	return finalCursorRow
 }
 
-func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, fullRender func(clear bool)) bool {
+func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, fullRender FullRenderer) bool {
 	var buffer strings.Builder
-	buffer.WriteString("\x1b[?2026h")
+	buffer.WriteString(SyncOutputBegin)
 
 	// Move to end of new content (clamp to 0 for empty content)
 	if cursorOffset > 0 {
@@ -325,7 +377,7 @@ func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, full
 
 	// Clear extra lines without scrolling
 	if extraLines > height {
-		fullRender(true)
+		fullRender.Render(true)
 		return true
 	}
 
@@ -344,52 +396,58 @@ func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, full
 		buffer.WriteString("A")
 	}
 
-	buffer.WriteString("\x1b[?2026l")
+	buffer.WriteString(SyncOutputEnd)
 	t.terminal.Write(buffer.String())
 	return false
 }
 
-func (t *TUI) renderComponent(width int, height int) []string {
-	// render all components in container
+func (t *TUI) renderComponent(width int) []string {
 	newLines := t.Render(width)
-	if len(t.overlayStacks) > 0 {
-		newLines = t.compositeOverlays(newLines, width, height)
-	}
 	return newLines
 }
 
-func (t *TUI) getFullRender(newLines []string, height int, row int, col int, width int) func(clear bool) {
-	fullRender := func(clear bool) {
-		t.fullRedrawCount++
-		var buffer strings.Builder
-		buffer.WriteString("\x1b[?2026h") // Begin synchronized output
-		if clear {
-			buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
-		}
+type FullRenderer struct {
+	newLines []string
+	height   int
+	width    int
+	row      int
+	col      int
+	tui      *TUI
+}
 
-		for i := range newLines {
-			if i > 0 {
-				buffer.WriteString("\r\n")
-			}
-			buffer.WriteString(newLines[i])
-		}
-		buffer.WriteString("\x1b[?2026l") // End synchronized output
-		t.terminal.Write(buffer.String())
-
-		t.cursorRow = max(0, len(newLines)-1)
-		t.hardwareCursorRow = t.cursorRow
-		// Reset max lines when clearing, otherwise track growth
-		if clear {
-			t.maxLinesRendered = len(newLines)
-		} else {
-			t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
-		}
-		t.previousViewportTop = max(0, t.maxLinesRendered-height)
-		t.positionHardwareCursor(row, col, len(newLines))
-		t.previousLines = newLines
-		t.previousWidth = width
+func (f FullRenderer) Render(clear bool) {
+	var buffer strings.Builder
+	buffer.WriteString(SyncOutputBegin) // Begin synchronized output
+	if clear {
+		buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
 	}
-	return fullRender
+	buffer.WriteString(strings.Join(f.newLines, "\r\n"))
+	buffer.WriteString(SyncOutputEnd) // End synchronized output
+	f.tui.terminal.Write(buffer.String())
+
+	f.tui.cursorRow = max(0, len(f.newLines)-1)
+	f.tui.hardwareCursorRow = f.tui.cursorRow
+
+	if clear {
+		f.tui.maxLinesRendered = len(f.newLines)
+	} else {
+		f.tui.maxLinesRendered = max(f.tui.maxLinesRendered, len(f.newLines))
+	}
+	f.tui.previousViewportTop = max(0, f.tui.maxLinesRendered-f.height)
+	f.tui.moveHardwareCursorTo(f.row, f.col, f.height)
+	f.tui.previousLines = f.newLines
+	f.tui.previousWidth = f.width
+}
+
+func (t *TUI) getFullRender(newLines []string, height int, row int, col int, width int) FullRenderer {
+	return FullRenderer{
+		newLines: newLines,
+		height:   height,
+		width:    width,
+		row:      row,
+		col:      col,
+		tui:      t,
+	}
 }
 
 func (t *TUI) start() error {
@@ -404,10 +462,38 @@ func (t *TUI) start() error {
 	)
 }
 
+func (t *TUI) handleQueryRequest(query QueryRequest) {
+	switch {
+	case query.action == "getShowHardwareCursor":
+		query.response <- t.showHardwareCursor
+	case query.action == "getFullRedraws":
+		query.response <- t.fullRedrawCount
+	case query.action == "queryCellSize":
+		t.cellSizeQueryPending = true
+		t.terminal.Write("\x1b[16t")
+		close(query.response)
+	case strings.HasPrefix(query.action, "setShowHardwareCursor_"):
+		enabled := strings.HasSuffix(query.action, "true")
+		t.setShowHardwareCursor(enabled)
+		close(query.response)
+	case strings.HasPrefix(query.action, "setClearOnShrink_"):
+		enabled := strings.HasSuffix(query.action, "true")
+		t.clearOnShrink = enabled
+		close(query.response)
+	}
+}
+
 // SetFocus sets the component that currently receives keyboard input.
 // In a TUI, only one interactive component (editor, selector, list, etc.) can receive input at a time.
 // This method switches the "input focus": first unfocus the old component, then focus the new one.
 func (t *TUI) SetFocus(component Component) {
+	select {
+	case t.focusChan <- FocusRequest{component: component}:
+	case <-t.stopChan:
+	}
+}
+
+func (t *TUI) setFocus(component Component) {
 	// Unfocus the previously focused component
 	if t.focusedComponent != nil {
 		if f, ok := t.focusedComponent.(Focusable); ok {
@@ -427,6 +513,13 @@ func (t *TUI) SetFocus(component Component) {
 }
 
 func (t *TUI) HandleInput(data string) {
+	select {
+	case t.inputChan <- InputRequest{data: data}:
+	case <-t.stopChan:
+	}
+}
+
+func (t *TUI) handleInput(data string) {
 	if t.cellSizeQueryPending {
 		t.inputBuffer.WriteString(data)
 		filtered := t.parseCellSizeResponse()
@@ -436,37 +529,18 @@ func (t *TUI) HandleInput(data string) {
 		data = filtered
 	}
 
-	var focusedOverlay *Overlay
-	for i := range t.overlayStacks {
-		if t.overlayStacks[i].component == t.focusedComponent {
-			focusedOverlay = &t.overlayStacks[i]
-			break
-		}
-	}
-	if focusedOverlay != nil && !t.isOverlayVisible(focusedOverlay) {
-		topVisible := t.getTopVisibleOverlay()
-		if topVisible != nil {
-			t.SetFocus(topVisible.component)
-		} else {
-			t.SetFocus(focusedOverlay.preFocus)
-		}
-	}
-
 	if t.focusedComponent != nil {
 		if keys.IsKeyRelease(data) && !t.focusedComponent.WantsKeyRelease() {
 			return
 		}
 		t.focusedComponent.HandleInput(data)
-		t.TriggerRender()
 	}
 }
 
 func (t *TUI) parseCellSizeResponse() string {
 	data := t.inputBuffer.String()
 
-	responsePattern := `\x1b\[6;(\d+);(\d+)t`
-	re := regexp.MustCompile(responsePattern)
-	matches := re.FindStringSubmatch(data)
+	matches := cellSizeResponsePattern.FindStringSubmatch(data)
 
 	if len(matches) == 3 {
 		heightPx, err1 := strconv.Atoi(matches[1])
@@ -481,9 +555,7 @@ func (t *TUI) parseCellSizeResponse() string {
 		}
 	}
 
-	partialPattern := `\x1b(\[6?;?[\d;]*)?$`
-	rePartial := regexp.MustCompile(partialPattern)
-	if rePartial.MatchString(data) {
+	if cellSizePartialPattern.MatchString(data) {
 		if len(data) > 0 {
 			lastChar := data[len(data)-1]
 			if !((lastChar >= 'a' && lastChar <= 'z') || (lastChar >= 'A' && lastChar <= 'Z') || lastChar == '~') {
@@ -498,283 +570,16 @@ func (t *TUI) parseCellSizeResponse() string {
 	return result
 }
 
-func (t *TUI) ShowOverlay(component Component, options OverlayOption) (func(), func(bool), func() bool) {
-	entryIndex := len(t.overlayStacks)
-	entry := Overlay{
-		component: component,
-		options:   options,
-		preFocus:  t.focusedComponent,
-		hidden:    false,
-	}
-	t.overlayStacks = append(t.overlayStacks, entry)
-
-	if t.isOverlayVisible(&t.overlayStacks[entryIndex]) {
-		t.SetFocus(component)
-	}
-	t.terminal.HideCursor()
-	t.TriggerRender()
-
-	hide := func() {
-		t.hide(component)
-	}
-
-	setHidden := func(hidden bool) {
-		// Find the entry in the slice
-		index := -1
-		for i := range t.overlayStacks {
-			if t.overlayStacks[i].component == component {
-				index = i
-				break
-			}
-		}
-		if index == -1 {
-			return
-		}
-
-		if t.overlayStacks[index].hidden == hidden {
-			return
-		}
-		t.overlayStacks[index].hidden = hidden
-		if hidden {
-			if t.focusedComponent == component {
-				topVisible := t.getTopVisibleOverlay()
-				if topVisible != nil {
-					t.SetFocus(topVisible.component)
-				} else {
-					t.SetFocus(t.overlayStacks[index].preFocus)
-				}
-			}
-		} else {
-			if t.isOverlayVisible(&t.overlayStacks[index]) {
-				t.SetFocus(component)
-			}
-		}
-		t.TriggerRender()
-	}
-
-	isHidden := func() bool {
-		for i := range t.overlayStacks {
-			if t.overlayStacks[i].component == component {
-				return t.overlayStacks[i].hidden
-			}
-		}
-		return true
-	}
-
-	return hide, setHidden, isHidden
-}
-
-func (t *TUI) hide(component Component) {
-	index := -1
-	for i := range t.overlayStacks {
-		if t.overlayStacks[i].component == component {
-			index = i
-			break
-		}
-	}
-	if index != -1 {
-		preFocus := t.overlayStacks[index].preFocus
-		t.overlayStacks = append(t.overlayStacks[:index], t.overlayStacks[index+1:]...)
-		if t.focusedComponent == component {
-			topVisible := t.getTopVisibleOverlay()
-			if topVisible != nil {
-				t.SetFocus(topVisible.component)
-			} else {
-				t.SetFocus(preFocus)
-			}
-		}
-		if len(t.overlayStacks) == 0 {
-			t.terminal.HideCursor()
-		}
-
-		t.TriggerRender()
-	}
-}
-
-func (t *TUI) HideOverlay() {
-	if len(t.overlayStacks) == 0 {
-		return
-	}
-	overlay := t.overlayStacks[len(t.overlayStacks)-1]
-	t.overlayStacks = t.overlayStacks[:len(t.overlayStacks)-1]
-
-	// Find topmost visible overlay, or fall back to preFocus
-	topVisible := t.getTopVisibleOverlay()
-	if topVisible != nil {
-		t.SetFocus(topVisible.component)
-	} else {
-		t.SetFocus(overlay.preFocus)
-	}
-
-	if len(t.overlayStacks) == 0 {
-		t.terminal.HideCursor()
-	}
-	t.TriggerRender()
-}
-
-func (t *TUI) HasOverlay() bool {
-	for _, entry := range t.overlayStacks {
-		if t.isOverlayVisible(&entry) {
-			return true
-		}
-	}
-	return false
-}
-
-// isOverlayVisible check if an overlay entry is currently visible.
-func (t *TUI) isOverlayVisible(entry *Overlay) bool {
-	if entry.hidden {
-		return false
-	}
-	if entry.options.Visible != nil {
-		width, height := t.terminal.GetSize()
-		return entry.options.Visible(width, height)
-	}
-	return true
-}
-
-// GetTopmostVisibleOverlay returns the topmost visible overlay, or nil if none.
-func (t *TUI) getTopVisibleOverlay() *Overlay {
-	for i := len(t.overlayStacks) - 1; i >= 0; i-- {
-		entry := t.overlayStacks[i]
-		if t.isOverlayVisible(&entry) {
-			return &entry
-		}
-	}
-	return nil
-}
-
-func (t *TUI) compositeOverlays(newLines []string, width, height int) []string {
-	if len(t.overlayStacks) == 0 {
-		return newLines
-	}
-
-	result := make([]string, len(newLines))
-	copy(result, newLines)
-
-	type renderedOverlay struct {
-		overlayLines []string
-		row          int
-		col          int
-		w            int
-	}
-
-	rendered := make([]renderedOverlay, 0)
-	minLinesNeeded := len(result)
-
-	for i := range t.overlayStacks {
-		entry := &t.overlayStacks[i]
-		if !t.isOverlayVisible(entry) {
-			continue
-		}
-
-		options := entry.options
-
-		layout := options.ResolveLayout(0, width, height)
-		overlayWidth := layout.width
-		component := entry.component
-		overlayLines := component.Render(overlayWidth)
-
-		if layout.maxHeight != nil && len(overlayLines) > *layout.maxHeight {
-			overlayLines = overlayLines[:*layout.maxHeight]
-		}
-
-		finalLayout := options.ResolveLayout(len(overlayLines), width, height)
-
-		rendered = append(rendered, renderedOverlay{
-			overlayLines: overlayLines,
-			row:          finalLayout.row,
-			col:          finalLayout.col,
-			w:            finalLayout.width,
-		})
-
-		if finalLayout.row+len(overlayLines) > minLinesNeeded {
-			minLinesNeeded = finalLayout.row + len(overlayLines)
-		}
-	}
-
-	workingHeight := max(t.maxLinesRendered, minLinesNeeded)
-
-	if padding := workingHeight - len(result); padding > 0 {
-		result = append(result, make([]string, padding)...)
-	}
-
-	viewportStart := max(0, workingHeight-height)
-
-	modifiedLines := make(map[int]bool)
-
-	for _, ro := range rendered {
-		for i := range ro.overlayLines {
-			idx := viewportStart + ro.row + i
-			if idx >= 0 && idx < len(result) {
-				truncatedOverlayLine := ro.overlayLines[i]
-				if VisibleWidth(ro.overlayLines[i]) > ro.w {
-					truncatedOverlayLine = SliceByColumn(ro.overlayLines[i], 0, ro.w, true)
-				}
-				result[idx] = t.compositeLineAt(result[idx], truncatedOverlayLine, ro.col, ro.w, width)
-				modifiedLines[idx] = true
-			}
-		}
-	}
-
-	for idx := range modifiedLines {
-		if VisibleWidth(result[idx]) > width {
-			result[idx] = SliceByColumn(result[idx], 0, width, true)
-		}
-	}
-
-	return result
-}
-
-func (t *TUI) compositeLineAt(baseLine string, overlayLine string, col int, overlayWidth int, termWidth int) string {
-	if containsImage(baseLine) {
-		return baseLine
-	}
-
-	// Single pass through baseLine extracts both before and after segments
-	afterStart := col + overlayWidth
-	before, beforeWidth, after, afterWidth := ExtractSegments(baseLine, col, afterStart, termWidth-afterStart, true)
-
-	// Extract overlay with width tracking (strict=true to exclude wide chars at boundary)
-	overlay := SliceWithWidth(overlayLine, 0, overlayWidth, true)
-
-	// Pad segments to target widths
-	beforePad := max(0, col-beforeWidth)
-	overlayPad := max(0, overlayWidth-overlay.width)
-	actualBeforeWidth := max(col, beforeWidth)
-	actualOverlayWidth := max(overlayWidth, overlay.width)
-	afterTarget := max(0, termWidth-actualBeforeWidth-actualOverlayWidth)
-	afterPad := max(0, afterTarget-afterWidth)
-
-	// Compose result
-	result := t.composeOverlayLine(before, beforePad, overlay, overlayPad, after, afterPad)
-
-	// CRITICAL: Always verify and truncate to terminal width.
-	// This is the final safeguard against width overflow which would crash the TUI.
-	resultWidth := VisibleWidth(result)
-	if resultWidth <= termWidth {
-		return result
-	}
-	// Truncate with strict=true to ensure we don't exceed termWidth
-	return SliceByColumn(result, 0, termWidth, true)
-}
-
-func (t *TUI) composeOverlayLine(before string, beforePad int, overlay SliceResult, overlayPad int, after string, afterPad int) string {
-	var result strings.Builder
-	result.WriteString(before)
-	result.WriteString(strings.Repeat(" ", beforePad))
-	result.WriteString(SEGMENT_RESET)
-	result.WriteString(overlay.text)
-	result.WriteString(strings.Repeat(" ", overlayPad))
-	result.WriteString(SEGMENT_RESET)
-	result.WriteString(after)
-	result.WriteString(strings.Repeat(" ", afterPad))
-	return result.String()
-}
-
 var SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
 
 func (t *TUI) SetShowHardwareCursor(enabled bool) {
+	select {
+	case t.queryChan <- QueryRequest{action: "setShowHardwareCursor_" + fmt.Sprintf("%v", enabled), response: make(chan interface{}, 1)}:
+	case <-t.stopChan:
+	}
+}
+
+func (t *TUI) setShowHardwareCursor(enabled bool) {
 	if t.showHardwareCursor == enabled {
 		return
 	}
@@ -782,30 +587,55 @@ func (t *TUI) SetShowHardwareCursor(enabled bool) {
 	if !enabled {
 		t.terminal.HideCursor()
 	}
-	t.TriggerRender()
 }
 
 func (t *TUI) SetClearOnShrink(enabled bool) {
-	t.clearOnShrink = enabled
+	select {
+	case t.queryChan <- QueryRequest{action: "setClearOnShrink_" + fmt.Sprintf("%v", enabled), response: make(chan interface{}, 1)}:
+	case <-t.stopChan:
+	}
 }
 
 func (t *TUI) QueryCellSize() {
 	if !t.terminal.IsKittyProtocolActive() {
 		return
 	}
-	t.cellSizeQueryPending = true
-	t.terminal.Write("\x1b[16t")
+	select {
+	case t.queryChan <- QueryRequest{action: "queryCellSize", response: make(chan any, 1)}:
+	case <-t.stopChan:
+	}
 }
 
 func (t *TUI) GetFullRedraws() int {
-	return t.fullRedrawCount
+	respChan := make(chan any, 1)
+	select {
+	case t.queryChan <- QueryRequest{action: "getFullRedraws", response: respChan}:
+		result := <-respChan
+		return result.(int)
+	case <-t.stopChan:
+		return 0
+	}
 }
 
 func (t *TUI) GetShowHardwareCursor() bool {
-	return t.showHardwareCursor
+	respChan := make(chan any, 1)
+	select {
+	case t.queryChan <- QueryRequest{action: "getShowHardwareCursor", response: respChan}:
+		result := <-respChan
+		return result.(bool)
+	case <-t.stopChan:
+		return false
+	}
 }
 
-func (t *TUI) positionHardwareCursor(row int, col int, totalLines int) {
+// moveHardwareCursorTo moves the hardware cursor to the specified position.
+// If row or col is negative, the cursor will be hidden.
+//
+// Parameters:
+//   - row: target row index (0-based), -1 means no valid position
+//   - col: target column index (0-based), -1 means no valid position
+//   - totalLines: total number of lines in the viewport (for bounds checking)
+func (t *TUI) moveHardwareCursorTo(row int, col int, totalLines int) {
 	// Check if no cursor position was found (row == -1, col == -1)
 	if (row < 0 || col < 0) || totalLines <= 0 {
 		t.terminal.HideCursor()

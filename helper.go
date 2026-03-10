@@ -88,10 +88,10 @@ func containsImage(line string) bool {
 	return strings.Contains(line, "\x1b_G") || strings.Contains(line, "\x1b]1337;File=")
 }
 
-// applyLineRests applies segment reset codes to each line. Lines containing images
+// appendSegmentResetCodes appends segment reset codes to each line. Lines containing images
 // are left unchanged, while other lines get a reset code appended to ensure proper
 // terminal rendering.
-func applyLineRests(lines []string) []string {
+func appendSegmentResetCodes(lines []string) []string {
 	result := make([]string, len(lines))
 	for i, line := range lines {
 		if containsImage(line) {
