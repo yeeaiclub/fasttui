@@ -197,9 +197,9 @@ func (t *TUI) doRender() {
 	if firstChangedIdx >= renderLinesLength {
 		if len(t.previousLines) > renderLinesLength {
 			targetRow := max(0, renderLinesLength-1)
-			lineDiff := computeLineDiff(targetRow)
+			cursorOffset := computeLineDiff(targetRow)
 			extra := renderLinesLength - len(t.previousLines)
-			if t.clearExtraLines(lineDiff, extra, height, fullRender) {
+			if t.clearTrailingLines(cursorOffset, extra, height, fullRender) {
 				return
 			}
 			t.cursorRow = targetRow
@@ -359,7 +359,8 @@ func (t *TUI) renderChangedLines(width, height, firstChangedIdx, lastChangedIdx 
 	return finalCursorRow
 }
 
-func (t *TUI) clearExtraLines(cursorOffset int, extraLines int, height int, fullRender FullRenderer) bool {
+// clearTrailingLines clears extra lines in terminal to prevent content scrolling
+func (t *TUI) clearTrailingLines(cursorOffset int, extraLines int, height int, fullRender FullRenderer) bool {
 	var buffer strings.Builder
 	buffer.WriteString(SyncOutputBegin)
 
