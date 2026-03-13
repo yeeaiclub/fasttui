@@ -561,46 +561,65 @@ func (e *Editor) pushUndoSnapshot() {
 	e.undoStack = append(e.undoStack, state)
 }
 
+// LayoutLine represents a single line in the editor layout with cursor information
 type LayoutLine struct {
-	Text      string
-	HasCursor bool
-	CursorPos int
+	Text      string // text content of the line
+	HasCursor bool   // whether the cursor is on this line
+	CursorPos int    // cursor position within the line
+}
+
+// cursorIndexInRunes converts a byte-based cursor column into a rune index
+// within the given line, clamping the column to the line length to avoid
+// slicing beyond bounds. If hasCursor is false, it always returns 0.
+func cursorIndexInRunes(line string, cursorCol int, hasCursor bool) int {
+	if !hasCursor {
+		return 0
+	}
+
+	if cursorCol > len(line) {
+		cursorCol = len(line)
+	}
+	return len([]rune(line[:cursorCol]))
+}
+
+// wrapChunkAtWidth returns the end rune index and text chunk for a single
+// visual line starting at the given rune index, ensuring at least one rune
+// is consumed even if its width exceeds contentWidth.
+func wrapChunkAtWidth(runes []rune, start int, contentWidth int) (int, string) {
+	end := start
+	width := 0
+
+	for end < len(runes) {
+		rw := fasttui.GraphemeWidth(string(runes[end]))
+		if width+rw > contentWidth {
+			break
+		}
+		width += rw
+		end++
+	}
+
+	if end == start && start < len(runes) {
+		end = start + 1
+	}
+
+	return end, string(runes[start:end])
 }
 
 func wrapLine(line string, contentWidth int, cursorCol int, hasCursor bool) []LayoutLine {
 	runes := []rune(line)
 	var layoutLines []LayoutLine
 
-	cursorRunePos := 0
-	if hasCursor {
-		cursorRunePos = len([]rune(line[:min(cursorCol, len(line))]))
-	}
+	cursorIndex := cursorIndexInRunes(line, cursorCol, hasCursor)
 
 	start := 0
 	for start < len(runes) {
-		end := start
-		width := 0
-
-		for end < len(runes) {
-			rw := fasttui.GraphemeWidth(string(runes[end]))
-			if width+rw > contentWidth {
-				break
-			}
-			width += rw
-			end++
-		}
-
-		if end == start && start < len(runes) {
-			end = start + 1
-		}
-
-		chunk := string(runes[start:end])
+		end, chunk := wrapChunkAtWidth(runes, start, contentWidth)
 
 		lineHasCursor := false
 		cursorPos := 0
-		if hasCursor && cursorRunePos >= start && cursorRunePos <= end {
+		if hasCursor && cursorIndex >= start && cursorIndex <= end {
 			lineHasCursor = true
-			cursorPos = len(string(runes[start:min(cursorRunePos, end)]))
+			cursorPos = len(string(runes[start:min(cursorIndex, end)]))
 		}
 
 		layoutLines = append(layoutLines, LayoutLine{
