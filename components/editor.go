@@ -10,6 +10,8 @@ import (
 	"github.com/yeeaiclub/fasttui/keys"
 )
 
+var _ fasttui.Component = (*Editor)(nil)
+
 type Editor struct {
 	isInPaste    bool
 	pasteBuffer  string

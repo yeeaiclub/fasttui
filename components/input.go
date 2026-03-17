@@ -7,6 +7,8 @@ import (
 	"github.com/yeeaiclub/fasttui/keys"
 )
 
+var _ fasttui.Component = (*Input)(nil)
+
 type Input struct {
 	value        string
 	cursor       int

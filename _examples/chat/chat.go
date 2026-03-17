@@ -162,7 +162,7 @@ func (app *ChatApp) handleSubmit(value string) {
 	case "/clear":
 		app.handleClearCommand()
 		return
-	case "git status":
+	case "/git status":
 		app.isResponding = true
 		app.showGitStatusConfirm()
 		return

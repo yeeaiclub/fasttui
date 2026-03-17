@@ -1,5 +1,9 @@
 package components
 
+import "github.com/yeeaiclub/fasttui"
+
+var _ fasttui.Component = (*Spacer)(nil)
+
 type Spacer struct {
 	lines int
 }
