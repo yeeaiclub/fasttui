@@ -2,6 +2,8 @@ package components
 
 import (
 	"strings"
+
+	"github.com/yeeaiclub/fasttui"
 )
 
 // DefaultTextStyle defines the default styling for markdown content
@@ -495,6 +497,7 @@ func (m *Markdown) applyDefaultStyle(text string) string {
 func (m *Markdown) applyPaddingAndBackground(lines []string, width int) []string {
 	leftMargin := strings.Repeat(" ", m.paddingX)
 	rightMargin := strings.Repeat(" ", m.paddingX)
+	contentWidth := max(1, width-m.paddingX*2)
 
 	var bgFn func(string) string
 	if m.defaultTextStyle != nil {
@@ -504,8 +507,18 @@ func (m *Markdown) applyPaddingAndBackground(lines []string, width int) []string
 	contentLines := []string{}
 
 	for _, line := range lines {
-		lineWithMargins := leftMargin + line + rightMargin
-		contentLines = append(contentLines, lineWithMargins)
+		// Wrap long lines so no line exceeds terminal width (avoids panic in TUI)
+		wrapped := fasttui.WrapAnsiText(line, contentWidth)
+		for _, seg := range wrapped {
+			lineWithMargins := leftMargin + seg + rightMargin
+			visibleLen := fasttui.VisibleWidth(lineWithMargins)
+			if visibleLen > width {
+				lineWithMargins = fasttui.SliceByColumn(lineWithMargins, 0, width, true)
+			} else if visibleLen < width {
+				lineWithMargins = lineWithMargins + strings.Repeat(" ", width-visibleLen)
+			}
+			contentLines = append(contentLines, lineWithMargins)
+		}
 	}
 
 	// Add top/bottom padding

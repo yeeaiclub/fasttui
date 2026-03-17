@@ -46,7 +46,9 @@ func splitIntoTokensWithAnsi(text string) []string {
 	return tokens
 }
 
-func WrapTextWithAnsi(text string, width int) []string {
+// WrapAnsiText wraps text to the given width,
+//  preserving ANSI escape codes (colors, bold, etc.).
+func WrapAnsiText(text string, width int) []string {
 	if text == "" {
 		return []string{""}
 	}
