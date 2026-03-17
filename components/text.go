@@ -74,7 +74,7 @@ func (t *Text) Render(width int) []string {
 	contentWidth := max(1, width-t.paddingX*2)
 
 	// Wrap text (this preserves ANSI codes but does NOT pad)
-	wrappedLines := fasttui.WrapTextWithAnsi(normalizedText, contentWidth)
+	wrappedLines := fasttui.WrapAnsiText(normalizedText, contentWidth)
 
 	// Add margins and background to each line
 	leftMargin := strings.Repeat(" ", t.paddingX)

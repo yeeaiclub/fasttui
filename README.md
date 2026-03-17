@@ -13,6 +13,15 @@ fasttui is a Go port of @mariozechner/pi-tui: the same differential renderer, br
 - **Inline Images**: Renders images in terminals that support Kitty or iTerm2 graphics protocols
 - **Autocomplete Support**: File paths and slash commands
 
+## quickstart
+
+### Installation
+
+```bash
+go get github.com/yourusername/fasttui
+```
+
+
 ## License
 
 Apache License 2.0

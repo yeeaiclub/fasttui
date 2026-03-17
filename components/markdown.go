@@ -2,6 +2,8 @@ package components
 
 import (
 	"strings"
+
+	"github.com/yeeaiclub/fasttui"
 )
 
 // DefaultTextStyle defines the default styling for markdown content
@@ -97,133 +99,42 @@ func (m *Markdown) renderMarkdown(text string, width int) []string {
 	lines := strings.Split(text, "\n")
 	result := []string{}
 	inCodeBlock := false
-	codeBlockLang := ""
 
 	for i := range lines {
 		line := lines[i]
 
-		// Code blocks
-		if after, ok := strings.CutPrefix(strings.TrimSpace(line), "```"); ok {
-			if !inCodeBlock {
-				inCodeBlock = true
-				codeBlockLang = strings.TrimSpace(after)
-				if m.theme != nil && m.theme.CodeBlockBorder != nil {
-					result = append(result, m.theme.CodeBlockBorder("```"+codeBlockLang))
-				} else {
-					result = append(result, "```"+codeBlockLang)
-				}
-			} else {
-				inCodeBlock = false
-				if m.theme != nil && m.theme.CodeBlockBorder != nil {
-					result = append(result, m.theme.CodeBlockBorder("```"))
-				} else {
-					result = append(result, "```")
-				}
-				result = append(result, "")
-			}
+		// Code block fences and content
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inCodeBlock = m.handleCodeBlockFence(strings.TrimSpace(line), inCodeBlock, &result)
 			continue
 		}
 
 		if inCodeBlock {
-			indent := "  "
-			if m.theme != nil && m.theme.CodeBlockIndent != "" {
-				indent = m.theme.CodeBlockIndent
-			}
-			styledLine := line
-			if m.theme != nil && m.theme.CodeBlock != nil {
-				styledLine = m.theme.CodeBlock(line)
-			}
-			result = append(result, indent+styledLine)
+			m.handleCodeBlockLine(line, &result)
 			continue
 		}
 
 		// Headings
-		if strings.HasPrefix(line, "#") {
-			level := 0
-			for _, ch := range line {
-				if ch == '#' {
-					level++
-				} else {
-					break
-				}
-			}
-			if level > 0 && level <= 6 && len(line) > level && line[level] == ' ' {
-				headingText := strings.TrimSpace(line[level:])
-				styledHeading := headingText
-				if m.theme != nil {
-					if level == 1 && m.theme.Heading != nil && m.theme.Bold != nil && m.theme.Underline != nil {
-						styledHeading = m.theme.Heading(m.theme.Bold(m.theme.Underline(headingText)))
-					} else if level == 2 && m.theme.Heading != nil && m.theme.Bold != nil {
-						styledHeading = m.theme.Heading(m.theme.Bold(headingText))
-					} else if m.theme.Heading != nil && m.theme.Bold != nil {
-						prefix := strings.Repeat("#", level) + " "
-						styledHeading = m.theme.Heading(m.theme.Bold(prefix + headingText))
-					}
-				}
-				result = append(result, styledHeading)
-				if i+1 < len(lines) && strings.TrimSpace(lines[i+1]) != "" {
-					result = append(result, "")
-				}
-				continue
-			}
+		if handled := m.handleHeading(line, i, lines, &result); handled {
+			continue
 		}
 
 		// Horizontal rule
-		if strings.TrimSpace(line) == "---" || strings.TrimSpace(line) == "***" || strings.TrimSpace(line) == "___" {
-			hrLine := strings.Repeat("─", min(width, 80))
-			if m.theme != nil && m.theme.HR != nil {
-				hrLine = m.theme.HR(hrLine)
-			}
-			result = append(result, hrLine)
-			if i+1 < len(lines) && strings.TrimSpace(lines[i+1]) != "" {
-				result = append(result, "")
-			}
+		if handled := m.handleHorizontalRule(line, i, lines, width, &result); handled {
 			continue
 		}
 
 		// Blockquote
-		if strings.HasPrefix(strings.TrimSpace(line), ">") {
-			quoteText := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), ">"))
-			quoteLine := quoteText
-			if m.theme != nil {
-				border := "│ "
-				if m.theme.QuoteBorder != nil {
-					border = m.theme.QuoteBorder(border)
-				}
-				if m.theme.Quote != nil && m.theme.Italic != nil {
-					quoteLine = border + m.theme.Quote(m.theme.Italic(quoteText))
-				} else {
-					quoteLine = border + quoteText
-				}
-			}
-			result = append(result, quoteLine)
+		if handled := m.handleBlockquote(line, &result); handled {
 			continue
 		}
 
-		// Lists
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") || strings.HasPrefix(trimmed, "+ ") {
-			listText := strings.TrimSpace(trimmed[2:])
-			bullet := "- "
-			if m.theme != nil && m.theme.ListBullet != nil {
-				bullet = m.theme.ListBullet(bullet)
-			}
-			result = append(result, bullet+m.renderInline(listText))
+		// Lists (unordered and ordered)
+		if handled := m.handleUnorderedList(line, &result); handled {
 			continue
 		}
-
-		// Numbered lists
-		if len(trimmed) > 2 && trimmed[0] >= '0' && trimmed[0] <= '9' {
-			dotIdx := strings.Index(trimmed, ". ")
-			if dotIdx > 0 && dotIdx < 4 {
-				listText := strings.TrimSpace(trimmed[dotIdx+2:])
-				bullet := trimmed[:dotIdx+2]
-				if m.theme != nil && m.theme.ListBullet != nil {
-					bullet = m.theme.ListBullet(bullet)
-				}
-				result = append(result, bullet+m.renderInline(listText))
-				continue
-			}
+		if handled := m.handleOrderedList(line, &result); handled {
+			continue
 		}
 
 		// Empty lines
@@ -233,16 +144,176 @@ func (m *Markdown) renderMarkdown(text string, width int) []string {
 		}
 
 		// Regular paragraph
-		result = append(result, m.renderInline(line))
-		if i+1 < len(lines) {
-			nextLine := strings.TrimSpace(lines[i+1])
-			if nextLine != "" && !strings.HasPrefix(nextLine, "-") && !strings.HasPrefix(nextLine, "*") {
-				result = append(result, "")
-			}
-		}
+		m.handleParagraph(line, i, lines, &result)
 	}
 
 	return result
+}
+
+func (m *Markdown) handleCodeBlockFence(trimmedLine string, inCodeBlock bool, result *[]string) bool {
+	after, ok := strings.CutPrefix(trimmedLine, "```")
+	if !ok {
+		return inCodeBlock
+	}
+
+	if !inCodeBlock {
+		lang := strings.TrimSpace(after)
+		borderText := "```" + lang
+		if m.theme != nil && m.theme.CodeBlockBorder != nil {
+			*result = append(*result, m.theme.CodeBlockBorder(borderText))
+		} else {
+			*result = append(*result, borderText)
+		}
+		return true
+	}
+
+	if m.theme != nil && m.theme.CodeBlockBorder != nil {
+		*result = append(*result, m.theme.CodeBlockBorder("```"))
+	} else {
+		*result = append(*result, "```")
+	}
+	*result = append(*result, "")
+
+	return false
+}
+
+func (m *Markdown) handleCodeBlockLine(line string, result *[]string) {
+	indent := "  "
+	if m.theme != nil && m.theme.CodeBlockIndent != "" {
+		indent = m.theme.CodeBlockIndent
+	}
+	styledLine := line
+	if m.theme != nil && m.theme.CodeBlock != nil {
+		styledLine = m.theme.CodeBlock(line)
+	}
+	*result = append(*result, indent+styledLine)
+}
+
+func (m *Markdown) handleHeading(line string, i int, lines []string, result *[]string) bool {
+	if !strings.HasPrefix(line, "#") {
+		return false
+	}
+
+	level := 0
+	for _, ch := range line {
+		if ch == '#' {
+			level++
+		} else {
+			break
+		}
+	}
+
+	if level == 0 || level > 6 || len(line) <= level || line[level] != ' ' {
+		return false
+	}
+
+	headingText := strings.TrimSpace(line[level:])
+	styledHeading := headingText
+	if m.theme != nil {
+		if level == 1 && m.theme.Heading != nil && m.theme.Bold != nil && m.theme.Underline != nil {
+			styledHeading = m.theme.Heading(m.theme.Bold(m.theme.Underline(headingText)))
+		} else if level == 2 && m.theme.Heading != nil && m.theme.Bold != nil {
+			styledHeading = m.theme.Heading(m.theme.Bold(headingText))
+		} else if m.theme.Heading != nil && m.theme.Bold != nil {
+			prefix := strings.Repeat("#", level) + " "
+			styledHeading = m.theme.Heading(m.theme.Bold(prefix + headingText))
+		}
+	}
+
+	*result = append(*result, styledHeading)
+	if i+1 < len(lines) && strings.TrimSpace(lines[i+1]) != "" {
+		*result = append(*result, "")
+	}
+
+	return true
+}
+
+func (m *Markdown) handleHorizontalRule(line string, i int, lines []string, width int, result *[]string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed != "---" && trimmed != "***" && trimmed != "___" {
+		return false
+	}
+
+	hrLine := strings.Repeat("─", min(width, 80))
+	if m.theme != nil && m.theme.HR != nil {
+		hrLine = m.theme.HR(hrLine)
+	}
+	*result = append(*result, hrLine)
+	if i+1 < len(lines) && strings.TrimSpace(lines[i+1]) != "" {
+		*result = append(*result, "")
+	}
+
+	return true
+}
+
+func (m *Markdown) handleBlockquote(line string, result *[]string) bool {
+	if !strings.HasPrefix(strings.TrimSpace(line), ">") {
+		return false
+	}
+
+	quoteText := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), ">"))
+	quoteLine := quoteText
+	if m.theme != nil {
+		border := "│ "
+		if m.theme.QuoteBorder != nil {
+			border = m.theme.QuoteBorder(border)
+		}
+		if m.theme.Quote != nil && m.theme.Italic != nil {
+			quoteLine = border + m.theme.Quote(m.theme.Italic(quoteText))
+		} else {
+			quoteLine = border + quoteText
+		}
+	}
+
+	*result = append(*result, quoteLine)
+	return true
+}
+
+func (m *Markdown) handleUnorderedList(line string, result *[]string) bool {
+	trimmed := strings.TrimSpace(line)
+	if !(strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") || strings.HasPrefix(trimmed, "+ ")) {
+		return false
+	}
+
+	listText := strings.TrimSpace(trimmed[2:])
+	bullet := "- "
+	if m.theme != nil && m.theme.ListBullet != nil {
+		bullet = m.theme.ListBullet(bullet)
+	}
+	*result = append(*result, bullet+m.renderInline(listText))
+
+	return true
+}
+
+func (m *Markdown) handleOrderedList(line string, result *[]string) bool {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) <= 2 || trimmed[0] < '0' || trimmed[0] > '9' {
+		return false
+	}
+
+	dotIdx := strings.Index(trimmed, ". ")
+	if dotIdx <= 0 || dotIdx >= 4 {
+		return false
+	}
+
+	listText := strings.TrimSpace(trimmed[dotIdx+2:])
+	bullet := trimmed[:dotIdx+2]
+	if m.theme != nil && m.theme.ListBullet != nil {
+		bullet = m.theme.ListBullet(bullet)
+	}
+	*result = append(*result, bullet+m.renderInline(listText))
+
+	return true
+}
+
+func (m *Markdown) handleParagraph(line string, i int, lines []string, result *[]string) {
+	*result = append(*result, m.renderInline(line))
+	if i+1 < len(lines) {
+		nextLine := strings.TrimSpace(lines[i+1])
+		if nextLine != "" && !strings.HasPrefix(nextLine, "-") && !strings.HasPrefix(nextLine, "*") {
+			*result = append(*result, "")
+		}
+	}
 }
 
 func (m *Markdown) renderInline(text string) string {
@@ -305,30 +376,30 @@ func (m *Markdown) replaceInlineCode(text string) string {
 		return text
 	}
 
-	result := ""
+	var result strings.Builder
 	remaining := text
 
 	for {
 		start := strings.Index(remaining, "`")
 		if start == -1 {
-			result += remaining
+			result.WriteString(remaining)
 			break
 		}
 
 		end := strings.Index(remaining[start+1:], "`")
 		if end == -1 {
-			result += remaining
+			result.WriteString(remaining)
 			break
 		}
 
 		end += start + 1
-		result += remaining[:start]
+		result.WriteString(remaining[:start])
 		content := remaining[start+1 : end]
-		result += m.theme.Code(content)
+		result.WriteString(m.theme.Code(content))
 		remaining = remaining[end+1:]
 	}
 
-	return result
+	return result.String()
 }
 
 func (m *Markdown) replaceLinks(text string) string {
@@ -336,64 +407,64 @@ func (m *Markdown) replaceLinks(text string) string {
 		return text
 	}
 
-	result := ""
+	var result strings.Builder
 	remaining := text
 
 	for {
 		start := strings.Index(remaining, "[")
 		if start == -1 {
-			result += remaining
+			result.WriteString(remaining)
 			break
 		}
 
 		textEnd := strings.Index(remaining[start:], "]")
 		if textEnd == -1 {
-			result += remaining
+			result.WriteString(remaining)
 			break
 		}
 		textEnd += start
 
 		if textEnd+1 >= len(remaining) || remaining[textEnd+1] != '(' {
-			result += remaining[:textEnd+1]
+			result.WriteString(remaining[:textEnd+1])
 			remaining = remaining[textEnd+1:]
 			continue
 		}
 
 		urlEnd := strings.Index(remaining[textEnd+2:], ")")
 		if urlEnd == -1 {
-			result += remaining
+			result.WriteString(remaining)
 			break
 		}
 		urlEnd += textEnd + 2
 
-		result += remaining[:start]
+		result.WriteString(remaining[:start])
 		linkText := remaining[start+1 : textEnd]
 		linkURL := remaining[textEnd+2 : urlEnd]
 
 		// Check if link text matches URL
 		if linkText == linkURL || (strings.HasPrefix(linkURL, "mailto:") && linkText == linkURL[7:]) {
 			if m.theme.Underline != nil {
-				result += m.theme.Link(m.theme.Underline(linkText))
+				result.WriteString(m.theme.Link(m.theme.Underline(linkText)))
 			} else {
-				result += m.theme.Link(linkText)
+				result.WriteString(m.theme.Link(linkText))
 			}
 		} else {
 			if m.theme.Underline != nil {
-				result += m.theme.Link(m.theme.Underline(linkText))
+				result.WriteString(m.theme.Link(m.theme.Underline(linkText)))
 			} else {
-				result += m.theme.Link(linkText)
+				result.WriteString(m.theme.Link(linkText))
 			}
 			if m.theme.LinkURL != nil {
-				result += m.theme.LinkURL(" (" + linkURL + ")")
+				result.WriteString(m.theme.LinkURL(" (" + linkURL + ")"))
 			} else {
-				result += " (" + linkURL + ")"
+				result.WriteString(" (" + linkURL + ")")
 			}
 		}
 
 		remaining = remaining[urlEnd+1:]
 	}
 
-	return result
+	return result.String()
 }
 
 func (m *Markdown) applyDefaultStyle(text string) string {
@@ -426,6 +497,7 @@ func (m *Markdown) applyDefaultStyle(text string) string {
 func (m *Markdown) applyPaddingAndBackground(lines []string, width int) []string {
 	leftMargin := strings.Repeat(" ", m.paddingX)
 	rightMargin := strings.Repeat(" ", m.paddingX)
+	contentWidth := max(1, width-m.paddingX*2)
 
 	var bgFn func(string) string
 	if m.defaultTextStyle != nil {
@@ -435,8 +507,18 @@ func (m *Markdown) applyPaddingAndBackground(lines []string, width int) []string
 	contentLines := []string{}
 
 	for _, line := range lines {
-		lineWithMargins := leftMargin + line + rightMargin
-		contentLines = append(contentLines, lineWithMargins)
+		// Wrap long lines so no line exceeds terminal width (avoids panic in TUI)
+		wrapped := fasttui.WrapAnsiText(line, contentWidth)
+		for _, seg := range wrapped {
+			lineWithMargins := leftMargin + seg + rightMargin
+			visibleLen := fasttui.VisibleWidth(lineWithMargins)
+			if visibleLen > width {
+				lineWithMargins = fasttui.SliceByColumn(lineWithMargins, 0, width, true)
+			} else if visibleLen < width {
+				lineWithMargins = lineWithMargins + strings.Repeat(" ", width-visibleLen)
+			}
+			contentLines = append(contentLines, lineWithMargins)
+		}
 	}
 
 	// Add top/bottom padding
