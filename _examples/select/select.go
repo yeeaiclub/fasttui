@@ -44,16 +44,21 @@ func main() {
 	tui := fasttui.NewTUI(term, true)
 
 	// Add title text
-	titleText := components.NewText("Git Command Selector", 2, 1, func(s string) string {
-		return "\x1b[44m\x1b[97m" + s + "\x1b[0m" // Blue background, white text
-	})
+	titleText := components.NewText(
+		"Git Command Selector",
+		2,
+		1,
+		components.WithTextBackground(func(s string) string {
+			return "\x1b[44m\x1b[97m" + s + "\x1b[0m" // Blue background, white text
+		}),
+	)
 	tui.AddChild(titleText)
 
 	// Add border
-	tui.AddChild(components.NewDynamicBorder(func(s string) string { return s }))
+	tui.AddChild(components.NewDynamicBorder(components.WithBorderColor(func(s string) string { return s })))
 
 	// Create select list
-	selectList := components.NewSelectList(items, 8, theme)
+	selectList := components.NewSelectList(items, 8, components.WithSelectListTheme(theme))
 
 	// Set up callbacks
 	selectList.SetOnSelect(func(item components.SelectItem) {
@@ -77,10 +82,10 @@ func main() {
 	tui.SetFocus(selectList)
 
 	// Add bottom border
-	tui.AddChild(components.NewDynamicBorder(func(s string) string { return s }))
+	tui.AddChild(components.NewDynamicBorder(components.WithBorderColor(func(s string) string { return s })))
 
 	// Add help text at bottom
-	helpText := components.NewText("↑/↓: Navigate | Enter: Select | Esc: Cancel", 1, 0, nil)
+	helpText := components.NewText("↑/↓: Navigate | Enter: Select | Esc: Cancel", 1, 0)
 	tui.AddChild(helpText)
 
 	// Start TUI

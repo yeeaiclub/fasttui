@@ -22,13 +22,31 @@ type Text struct {
 	cacheValid  bool
 }
 
-func NewText(text string, paddingX int, paddingY int, customBgFn func(string) string) *Text {
-	return &Text{
-		text:       text,
-		paddingX:   paddingX,
-		paddingY:   paddingY,
-		customBgFn: customBgFn,
+// TextOption configures optional behavior and theme-related aspects of Text.
+type TextOption func(*Text)
+
+// WithTextBackground sets a background function used when rendering the text.
+func WithTextBackground(bgFn func(string) string) TextOption {
+	return func(t *Text) {
+		t.customBgFn = bgFn
 	}
+}
+
+// NewText creates a Text component with optional theming options.
+func NewText(text string, paddingX int, paddingY int, opts ...TextOption) *Text {
+	t := &Text{
+		text:     text,
+		paddingX: paddingX,
+		paddingY: paddingY,
+	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(t)
+		}
+	}
+
+	return t
 }
 
 func (t *Text) SetText(text string) {

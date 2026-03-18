@@ -42,7 +42,7 @@ func NewExtensionSelectorComponent(
 		keybindings:      keys.GetEditorKeybindings(),
 	}
 
-	e.AddChild(components.NewDynamicBorder(nil))
+	e.AddChild(components.NewDynamicBorder())
 	e.AddChild(components.NewSpacer(1))
 
 	e.titleText = components.NewText(ThemeFg("accent", title), 1, 0, nil)
@@ -64,7 +64,7 @@ func NewExtensionSelectorComponent(
 	e.listContainer = fasttui.NewContainer()
 	e.AddChild(e.listContainer)
 	e.AddChild(components.NewSpacer(1))
-	e.AddChild(components.NewDynamicBorder(nil))
+	e.AddChild(components.NewDynamicBorder())
 	e.updateList()
 	return e
 }

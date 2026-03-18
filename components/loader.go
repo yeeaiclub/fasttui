@@ -22,25 +22,45 @@ type Loader struct {
 	running        bool
 }
 
+// LoaderOption configures optional theming and behavior of Loader.
+type LoaderOption func(*Loader)
+
+// WithLoaderSpinnerColor sets the color function used for the spinner.
+func WithLoaderSpinnerColor(fn func(string) string) LoaderOption {
+	return func(l *Loader) {
+		l.spinnerColorFn = fn
+	}
+}
+
+// WithLoaderMessageColor sets the color function used for the message.
+func WithLoaderMessageColor(fn func(string) string) LoaderOption {
+	return func(l *Loader) {
+		l.messageColorFn = fn
+	}
+}
+
 func NewLoader(
 	ui *fasttui.TUI,
-	spinnerColorFn func(string) string,
-	messageColorFn func(string) string,
 	message string,
+	opts ...LoaderOption,
 ) *Loader {
 	if message == "" {
 		message = "Loading..."
 	}
 
 	loader := &Loader{
-		Text:           NewText("", 1, 0, nil),
+		Text:           NewText("", 1, 0),
 		frames:         []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
 		currentFrame:   0,
 		ui:             ui,
-		spinnerColorFn: spinnerColorFn,
-		messageColorFn: messageColorFn,
 		message:        message,
 		stopChan:       make(chan struct{}),
+	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(loader)
+		}
 	}
 
 	loader.Start()

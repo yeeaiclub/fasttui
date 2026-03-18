@@ -31,14 +31,38 @@ type Markdown struct {
 	defaultStylePrefix *string
 }
 
-func NewMarkdown(text string, paddingX, paddingY int, theme *MarkdownTheme, defaultTextStyle *DefaultTextStyle) *Markdown {
-	return &Markdown{
-		text:             text,
-		paddingX:         paddingX,
-		paddingY:         paddingY,
-		theme:            theme,
-		defaultTextStyle: defaultTextStyle,
+// MarkdownOption configures optional behavior and theme of Markdown.
+type MarkdownOption func(*Markdown)
+
+// WithMarkdownTheme sets the MarkdownTheme used for rendering.
+func WithMarkdownTheme(theme *MarkdownTheme) MarkdownOption {
+	return func(m *Markdown) {
+		m.theme = theme
 	}
+}
+
+// WithMarkdownDefaultTextStyle sets the default text style (including background).
+func WithMarkdownDefaultTextStyle(style *DefaultTextStyle) MarkdownOption {
+	return func(m *Markdown) {
+		m.defaultTextStyle = style
+	}
+}
+
+// NewMarkdown creates a Markdown component with optional theming and style options.
+func NewMarkdown(text string, paddingX, paddingY int, opts ...MarkdownOption) *Markdown {
+	m := &Markdown{
+		text:     text,
+		paddingX: paddingX,
+		paddingY: paddingY,
+	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(m)
+		}
+	}
+
+	return m
 }
 
 func (m *Markdown) SetText(text string) {

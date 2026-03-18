@@ -13,7 +13,7 @@ import (
 func main() {
 	term := terminal.NewProcessTerminal()
 	tui := fasttui.NewTUI(term, true)
-	tui.AddChild(components.NewDynamicBorder(func(s string) string { return s }))
+	tui.AddChild(components.NewDynamicBorder(components.WithBorderColor(func(s string) string { return s })))
 
 	input := components.NewInput()
 	input.SetOnSubmit(func(value string) {
@@ -24,7 +24,7 @@ func main() {
 	})
 	tui.AddChild(input)
 	tui.SetFocus(input)
-	tui.AddChild(components.NewDynamicBorder(func(s string) string { return s }))
+	tui.AddChild(components.NewDynamicBorder(components.WithBorderColor(func(s string) string { return s })))
 
 	tui.Start()
 

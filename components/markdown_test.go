@@ -9,7 +9,7 @@ import (
 )
 
 func TestApplyPaddingAndBackground_ShortLine(t *testing.T) {
-	m := NewMarkdown("", 1, 0, nil, nil)
+	m := NewMarkdown("", 1, 0)
 	lines := []string{"Hi"}
 	width := 10
 	result := m.applyPaddingAndBackground(lines, width)
@@ -21,7 +21,7 @@ func TestApplyPaddingAndBackground_ShortLine(t *testing.T) {
 }
 
 func TestApplyPaddingAndBackground_LongLineWraps(t *testing.T) {
-	m := NewMarkdown("", 1, 0, nil, nil)
+	m := NewMarkdown("", 1, 0)
 	lines := []string{"Hello world here"}
 	width := 10
 	result := m.applyPaddingAndBackground(lines, width)
@@ -34,7 +34,7 @@ func TestApplyPaddingAndBackground_LongLineWraps(t *testing.T) {
 }
 
 func TestApplyPaddingAndBackground_ExactContentWidth(t *testing.T) {
-	m := NewMarkdown("", 1, 0, nil, nil)
+	m := NewMarkdown("", 1, 0)
 	width := 10
 	lines := []string{"12345678"}
 	result := m.applyPaddingAndBackground(lines, width)
@@ -45,7 +45,7 @@ func TestApplyPaddingAndBackground_ExactContentWidth(t *testing.T) {
 }
 
 func TestApplyPaddingAndBackground_TopBottomPadding(t *testing.T) {
-	m := NewMarkdown("", 0, 1, nil, nil)
+	m := NewMarkdown("", 0, 1)
 	lines := []string{"x"}
 	width := 5
 	result := m.applyPaddingAndBackground(lines, width)
@@ -57,7 +57,7 @@ func TestApplyPaddingAndBackground_TopBottomPadding(t *testing.T) {
 }
 
 func TestApplyPaddingAndBackground_EmptyLines(t *testing.T) {
-	m := NewMarkdown("", 0, 1, nil, nil)
+	m := NewMarkdown("", 0, 1)
 	lines := []string{}
 	width := 6
 	result := m.applyPaddingAndBackground(lines, width)
@@ -73,7 +73,7 @@ func TestApplyPaddingAndBackground_WithBgFn(t *testing.T) {
 		wrapped += "[" + s + "]"
 		return "[" + s + "]"
 	}
-	m := NewMarkdown("", 0, 1, nil, &DefaultTextStyle{BgColor: bgFn})
+	m := NewMarkdown("", 0, 1, WithMarkdownDefaultTextStyle(&DefaultTextStyle{BgColor: bgFn}))
 	lines := []string{"a"}
 	width := 3
 	result := m.applyPaddingAndBackground(lines, width)
@@ -84,7 +84,7 @@ func TestApplyPaddingAndBackground_WithBgFn(t *testing.T) {
 }
 
 func TestApplyPaddingAndBackground_NoExceedWidth(t *testing.T) {
-	m := NewMarkdown("", 1, 0, nil, nil)
+	m := NewMarkdown("", 1, 0)
 	lines := []string{"这是一段很长的中文内容需要被正确换行显示"}
 	width := 12
 	result := m.applyPaddingAndBackground(lines, width)

@@ -1636,7 +1636,7 @@ func (e *Editor) tryTriggerAutocomplete(explicitTab bool) {
 		}
 	}
 
-	e.autocompleteList = NewSelectList(items, e.autocompleteMaxVisible, e.autocompleteSelectTheme)
+	e.autocompleteList = NewSelectList(items, e.autocompleteMaxVisible, WithSelectListTheme(e.autocompleteSelectTheme))
 	e.autocompleteState = "regular"
 }
 
@@ -1710,7 +1710,7 @@ func (e *Editor) forceFileAutocomplete(explicitTab bool) {
 			Description: it.Description,
 		}
 	}
-	e.autocompleteList = NewSelectList(items, e.autocompleteMaxVisible, e.autocompleteSelectTheme)
+	e.autocompleteList = NewSelectList(items, e.autocompleteMaxVisible, WithSelectListTheme(e.autocompleteSelectTheme))
 	e.autocompleteState = "force"
 }
 
@@ -1752,7 +1752,7 @@ func (e *Editor) updateAutocomplete() {
 			Description: it.Description,
 		}
 	}
-	e.autocompleteList = NewSelectList(items, e.autocompleteMaxVisible, e.autocompleteSelectTheme)
+	e.autocompleteList = NewSelectList(items, e.autocompleteMaxVisible, WithSelectListTheme(e.autocompleteSelectTheme))
 }
 
 // applyAutocompleteItem applies the currently selected autocomplete item.

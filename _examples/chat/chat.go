@@ -60,7 +60,12 @@ func (app *ChatApp) handleClearCommand() {
 }
 
 func (app *ChatApp) addUserMessage(value string) {
-	userMessage := components.NewMarkdown(value, 1, 1, app.theme, nil)
+	userMessage := components.NewMarkdown(
+		value,
+		1,
+		1,
+		components.WithMarkdownTheme(app.theme),
+	)
 	// Insert before editor (editor is at len-2, footer at len-1)
 	children := app.tui.GetChildren()
 	app.tui.InsertChildAt(len(children)-2, userMessage)
@@ -69,9 +74,9 @@ func (app *ChatApp) addUserMessage(value string) {
 func (app *ChatApp) addLoader() *components.Loader {
 	loader := components.NewLoader(
 		app.tui,
-		cyan,
-		dim,
 		"Thinking...",
+		components.WithLoaderSpinnerColor(cyan),
+		components.WithLoaderMessageColor(dim),
 	)
 	// Insert before editor (editor is at len-2, footer at len-1)
 	children := app.tui.GetChildren()
@@ -98,7 +103,12 @@ func (app *ChatApp) simulateResponse(loader *components.Loader) {
 	}
 	randomResponse := responses[rand.Intn(len(responses))]
 
-	botMessage := components.NewMarkdown(randomResponse, 1, 1, app.theme, nil)
+	botMessage := components.NewMarkdown(
+		randomResponse,
+		1,
+		1,
+		components.WithMarkdownTheme(app.theme),
+	)
 	// Insert before editor (editor is at len-2, footer at len-1)
 	children := app.tui.GetChildren()
 	app.tui.InsertChildAt(len(children)-2, botMessage)
@@ -141,7 +151,12 @@ func (app *ChatApp) hideSelector() {
 }
 
 func (app *ChatApp) addBotMessage(text string) {
-	botMessage := components.NewMarkdown(text, 1, 1, app.theme, nil)
+	botMessage := components.NewMarkdown(
+		text,
+		1,
+		1,
+		components.WithMarkdownTheme(app.theme),
+	)
 	// Insert before editor (editor is at len-2, footer at len-1)
 	children := app.tui.GetChildren()
 	app.tui.InsertChildAt(len(children)-2, botMessage)
@@ -241,8 +256,8 @@ func (app *ChatApp) exit() {
 }
 
 func (app *ChatApp) Run() {
-	welcomeText := components.NewText(bold("Welcome to Simple Chat!"), 1, 1, nil)
-	instructionsText := components.NewText("Type your messages below. Commands: /delete (remove last message), /clear (clear all messages)", 1, 0, nil)
+	welcomeText := components.NewText(bold("Welcome to Simple Chat!"), 1, 1)
+	instructionsText := components.NewText("Type your messages below. Commands: /delete (remove last message), /clear (clear all messages)", 1, 0)
 
 	app.tui.AddChild(welcomeText)
 	app.tui.AddChild(instructionsText)
