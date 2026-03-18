@@ -6,6 +6,8 @@ import (
 	"github.com/yeeaiclub/fasttui"
 )
 
+var _ fasttui.Component = (*Text)(nil)
+
 // Text component - displays multi-line text with word wrapping
 type Text struct {
 	text       string

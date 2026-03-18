@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/yeeaiclub/fasttui"
 	"github.com/yeeaiclub/fasttui/keys"
 )
+
+var _ fasttui.Component = (*Editor)(nil)
 
 type Editor struct {
 	isInPaste    bool
@@ -24,6 +27,14 @@ type Editor struct {
 	scrollOffset int
 
 	focused bool
+
+	// Autocomplete support
+	autocompleteProvider    AutocompleteProvider
+	autocompleteList        *SelectList
+	autocompleteState       string // "", "regular", "force"
+	autocompletePrefix      string
+	autocompleteMaxVisible  int
+	autocompleteSelectTheme SelectListTheme
 
 	// Callbacks
 	OnSubmit func(text string)
@@ -56,7 +67,25 @@ func NewEditor(term fasttui.Terminal, submit func(text string)) *Editor {
 		borderColor: func(s string) string {
 			return s
 		},
+		autocompleteMaxVisible: 5,
 	}
+}
+
+// SetAutocomplete configures autocomplete provider and select list theme.
+// maxVisible is clamped to [3, 20]; pass 0 to use default.
+func (e *Editor) SetAutocomplete(provider AutocompleteProvider, theme SelectListTheme, maxVisible int) {
+	e.autocompleteProvider = provider
+	e.autocompleteSelectTheme = theme
+	if maxVisible <= 0 {
+		maxVisible = 5
+	}
+	if maxVisible < 3 {
+		maxVisible = 3
+	}
+	if maxVisible > 20 {
+		maxVisible = 20
+	}
+	e.autocompleteMaxVisible = maxVisible
 }
 
 func (e *Editor) HandleInput(data string) {
@@ -102,9 +131,48 @@ func (e *Editor) HandleInput(data string) {
 		return
 	}
 
-	// Tab - trigger completion (placeholder for future autocomplete)
+	// Handle autocomplete mode
+	if e.autocompleteState != "" && e.autocompleteList != nil && e.autocompleteProvider != nil {
+		// Cancel autocomplete
+		if kb.Matches(data, keys.EditorActionSelectCancel) {
+			e.cancelAutocomplete()
+			return
+		}
+
+		// Navigate within autocomplete list
+		if kb.Matches(data, keys.EditorActionSelectUp) ||
+			kb.Matches(data, keys.EditorActionSelectDown) ||
+			kb.Matches(data, keys.EditorActionSelectPageUp) ||
+			kb.Matches(data, keys.EditorActionSelectPageDown) {
+			e.autocompleteList.HandleInput(data)
+			return
+		}
+
+		// Apply completion on Tab
+		if kb.Matches(data, keys.EditorActionTab) {
+			item := e.autocompleteList.getSelectItem()
+			e.applyAutocompleteItem(item)
+			return
+		}
+
+		// Apply completion on Enter
+		if kb.Matches(data, keys.EditorActionSelectConfirm) {
+			item := e.autocompleteList.getSelectItem()
+			if e.autocompletePrefix != "" && strings.HasPrefix(e.autocompletePrefix, "/") {
+				// For slash commands, apply completion then immediately submit
+				e.applyAutocompleteItem(item)
+				e.handleSubmit()
+				return
+			}
+
+			e.applyAutocompleteItem(item)
+			return
+		}
+	}
+
+	// Tab - trigger completion
 	if kb.Matches(data, keys.EditorActionTab) {
-		// TODO: handleTabCompletion()
+		e.handleTabCompletion()
 		return
 	}
 
@@ -331,6 +399,17 @@ func (e *Editor) Render(width int) []string {
 	} else {
 		result = append(result, e.fillWithHorizontal(width))
 	}
+
+	// Render autocomplete list if active
+	if e.autocompleteState != "" && e.autocompleteList != nil {
+		acLines := e.autocompleteList.Render(contentWidth)
+		for _, line := range acLines {
+			lineWidth := fasttui.VisibleWidth(line)
+			padding := strings.Repeat(" ", max(0, contentWidth-lineWidth))
+			result = append(result, leftPadding+line+padding+rightPadding)
+		}
+	}
+
 	return result
 }
 
@@ -348,7 +427,7 @@ func (e *Editor) renderLineWithCursor(line LayoutLine, contentWidth, paddingX in
 	after := displayText[cursorPos:]
 
 	marker := ""
-	if e.focused {
+	if e.focused && !e.IsShowingAutocomplete() {
 		marker = CURSOR_MARKER
 	}
 
@@ -767,6 +846,36 @@ func (e *Editor) insertCharacter(char string) {
 	if e.OnChange != nil {
 		e.OnChange(e.GetTextString())
 	}
+
+	// Autocomplete triggers
+	if e.autocompleteProvider != nil {
+		if e.autocompleteState == "" {
+			// Auto-trigger for "/" at the start of message
+			if char == "/" && e.isAtStartOfMessage() {
+				e.tryTriggerAutocomplete(false)
+			} else if char == "@" {
+				// Auto-trigger for "@" after whitespace or at start of line
+				currentLine := e.state.lines[e.state.cursorLine]
+				textBeforeCursor := currentLine[:e.state.cursorCol]
+				var charBeforeAt rune
+				if len([]rune(textBeforeCursor)) >= 2 {
+					runes := []rune(textBeforeCursor)
+					charBeforeAt = runes[len(runes)-2]
+				}
+				if len(textBeforeCursor) == 1 || charBeforeAt == ' ' || charBeforeAt == '\t' {
+					e.tryTriggerAutocomplete(false)
+				}
+			} else if isWordChar(char) {
+				currentLine := e.state.lines[e.state.cursorLine]
+				textBeforeCursor := currentLine[:e.state.cursorCol]
+				if e.isInSlashCommandContext(textBeforeCursor) || isAtFileRefContext(textBeforeCursor) {
+					e.tryTriggerAutocomplete(false)
+				}
+			}
+		} else {
+			e.updateAutocomplete()
+		}
+	}
 }
 
 // handleBackspace handles backspace key
@@ -805,6 +914,19 @@ func (e *Editor) handleBackspace() {
 	if e.OnChange != nil {
 		e.OnChange(e.GetTextString())
 	}
+
+	// Update or re-trigger autocomplete after backspace
+	if e.autocompleteProvider != nil {
+		if e.autocompleteState != "" {
+			e.updateAutocomplete()
+		} else {
+			currentLine := e.state.lines[e.state.cursorLine]
+			textBeforeCursor := currentLine[:e.state.cursorCol]
+			if e.isInSlashCommandContext(textBeforeCursor) || isAtFileRefContext(textBeforeCursor) {
+				e.tryTriggerAutocomplete(false)
+			}
+		}
+	}
 }
 
 // handleForwardDelete handles delete key
@@ -837,6 +959,19 @@ func (e *Editor) handleForwardDelete() {
 
 	if e.OnChange != nil {
 		e.OnChange(e.GetTextString())
+	}
+
+	// Update or re-trigger autocomplete after forward delete
+	if e.autocompleteProvider != nil {
+		if e.autocompleteState != "" {
+			e.updateAutocomplete()
+		} else {
+			currentLine := e.state.lines[e.state.cursorLine]
+			textBeforeCursor := currentLine[:e.state.cursorCol]
+			if e.isInSlashCommandContext(textBeforeCursor) || isAtFileRefContext(textBeforeCursor) {
+				e.tryTriggerAutocomplete(false)
+			}
+		}
 	}
 }
 
@@ -1394,5 +1529,260 @@ func (e *Editor) pageScroll(direction int) {
 		if e.state.cursorCol > lineLen {
 			e.state.cursorCol = lineLen
 		}
+	}
+}
+
+// --- Autocomplete helpers ---
+
+// isSlashMenuAllowed returns true if all other lines except current are empty.
+func (e *Editor) isSlashMenuAllowed() bool {
+	for i, line := range e.state.lines {
+		if i == e.state.cursorLine {
+			continue
+		}
+		if strings.TrimSpace(line) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// isAtStartOfMessage checks if cursor is at start of message (for slash commands).
+func (e *Editor) isAtStartOfMessage() bool {
+	if !e.isSlashMenuAllowed() {
+		return false
+	}
+	currentLine := ""
+	if e.state.cursorLine < len(e.state.lines) {
+		currentLine = e.state.lines[e.state.cursorLine]
+	}
+	if e.state.cursorCol > len(currentLine) {
+		return false
+	}
+	before := currentLine[:e.state.cursorCol]
+	trimmed := strings.TrimSpace(before)
+	return trimmed == "" || trimmed == "/"
+}
+
+// isInSlashCommandContext checks if we're currently typing a slash command.
+func (e *Editor) isInSlashCommandContext(textBeforeCursor string) bool {
+	if !e.isSlashMenuAllowed() {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimLeftFunc(textBeforeCursor, unicode.IsSpace), "/")
+}
+
+// isAtFileRefContext checks if text before cursor looks like "@something" token.
+func isAtFileRefContext(textBeforeCursor string) bool {
+	textBeforeCursor = strings.TrimRightFunc(textBeforeCursor, unicode.IsSpace)
+	if textBeforeCursor == "" {
+		return false
+	}
+	// Find last whitespace
+	lastSpace := -1
+	for i, r := range textBeforeCursor {
+		if unicode.IsSpace(r) {
+			lastSpace = i
+		}
+	}
+	segment := textBeforeCursor
+	if lastSpace >= 0 && lastSpace+1 < len(textBeforeCursor) {
+		segment = textBeforeCursor[lastSpace+1:]
+	}
+	return strings.HasPrefix(segment, "@")
+}
+
+// isWordChar matches [a-zA-Z0-9._-]
+func isWordChar(s string) bool {
+	if s == "" {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(s)
+	if r == '.' || r == '-' || r == '_' {
+		return true
+	}
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+// tryTriggerAutocomplete fetches suggestions and shows autocomplete list.
+func (e *Editor) tryTriggerAutocomplete(explicitTab bool) {
+	if e.autocompleteProvider == nil {
+		return
+	}
+
+	// For explicit Tab, ask provider if file completion should trigger.
+	if explicitTab {
+		if provider, ok := e.autocompleteProvider.(*CombinedAutocompleteProvider); ok {
+			if !provider.ShouldTriggerFileCompletion(e.state.lines, e.state.cursorLine, e.state.cursorCol) {
+				return
+			}
+		}
+	}
+
+	suggestions := e.autocompleteProvider.GetSuggestions(e.state.lines, e.state.cursorLine, e.state.cursorCol)
+	if suggestions == nil || len(suggestions.Items) == 0 {
+		e.cancelAutocomplete()
+		return
+	}
+
+	e.autocompletePrefix = suggestions.Prefix
+
+	items := make([]SelectItem, len(suggestions.Items))
+	for i, it := range suggestions.Items {
+		items[i] = SelectItem{
+			Label:       it.Label,
+			Value:       it.Value,
+			Description: it.Description,
+		}
+	}
+
+	e.autocompleteList = NewSelectList(items, e.autocompleteMaxVisible, e.autocompleteSelectTheme)
+	e.autocompleteState = "regular"
+}
+
+// handleTabCompletion handles Tab key when not already in autocomplete mode.
+func (e *Editor) handleTabCompletion() {
+	if e.autocompleteProvider == nil {
+		return
+	}
+
+	currentLine := ""
+	if e.state.cursorLine < len(e.state.lines) {
+		currentLine = e.state.lines[e.state.cursorLine]
+	}
+	if e.state.cursorCol > len(currentLine) {
+		return
+	}
+	beforeCursor := currentLine[:e.state.cursorCol]
+
+	// Slash command completion when we're at beginning of line command.
+	if e.isInSlashCommandContext(beforeCursor) && !strings.Contains(strings.TrimSpace(beforeCursor), " ") {
+		e.tryTriggerAutocomplete(true)
+		return
+	}
+
+	// Otherwise force file autocomplete.
+	e.forceFileAutocomplete(true)
+}
+
+// forceFileAutocomplete forces file-based autocomplete (usually on Tab).
+func (e *Editor) forceFileAutocomplete(explicitTab bool) {
+	if e.autocompleteProvider == nil {
+		return
+	}
+
+	provider, ok := e.autocompleteProvider.(*CombinedAutocompleteProvider)
+	if !ok {
+		// Fallback to regular suggestions
+		e.tryTriggerAutocomplete(true)
+		return
+	}
+
+	suggestions := provider.GetForceFileSuggestions(e.state.lines, e.state.cursorLine, e.state.cursorCol)
+	if suggestions == nil || len(suggestions.Items) == 0 {
+		e.cancelAutocomplete()
+		return
+	}
+
+	// If there's exactly one suggestion and Tab explicitly pressed, apply immediately.
+	if explicitTab && len(suggestions.Items) == 1 {
+		item := suggestions.Items[0]
+		e.pushUndoSnapshot()
+		e.lastAction = ""
+		res := provider.ApplyCompletion(e.state.lines, e.state.cursorLine, e.state.cursorCol, item, suggestions.Prefix)
+		if res != nil {
+			e.state.lines = res.Lines
+			e.state.cursorLine = res.CursorLine
+			e.state.cursorCol = res.CursorCol
+		}
+		if e.OnChange != nil {
+			e.OnChange(e.GetTextString())
+		}
+		return
+	}
+
+	e.autocompletePrefix = suggestions.Prefix
+	items := make([]SelectItem, len(suggestions.Items))
+	for i, it := range suggestions.Items {
+		items[i] = SelectItem{
+			Label:       it.Label,
+			Value:       it.Value,
+			Description: it.Description,
+		}
+	}
+	e.autocompleteList = NewSelectList(items, e.autocompleteMaxVisible, e.autocompleteSelectTheme)
+	e.autocompleteState = "force"
+}
+
+// cancelAutocomplete hides autocomplete UI.
+func (e *Editor) cancelAutocomplete() {
+	e.autocompleteState = ""
+	e.autocompleteList = nil
+	e.autocompletePrefix = ""
+}
+
+// IsShowingAutocomplete reports whether autocomplete UI is visible.
+func (e *Editor) IsShowingAutocomplete() bool {
+	return e.autocompleteState != ""
+}
+
+// updateAutocomplete refreshes suggestions based on current cursor position.
+func (e *Editor) updateAutocomplete() {
+	if e.autocompleteProvider == nil || e.autocompleteState == "" {
+		return
+	}
+
+	if e.autocompleteState == "force" {
+		e.forceFileAutocomplete(false)
+		return
+	}
+
+	suggestions := e.autocompleteProvider.GetSuggestions(e.state.lines, e.state.cursorLine, e.state.cursorCol)
+	if suggestions == nil || len(suggestions.Items) == 0 {
+		e.cancelAutocomplete()
+		return
+	}
+
+	e.autocompletePrefix = suggestions.Prefix
+	items := make([]SelectItem, len(suggestions.Items))
+	for i, it := range suggestions.Items {
+		items[i] = SelectItem{
+			Label:       it.Label,
+			Value:       it.Value,
+			Description: it.Description,
+		}
+	}
+	e.autocompleteList = NewSelectList(items, e.autocompleteMaxVisible, e.autocompleteSelectTheme)
+}
+
+// applyAutocompleteItem applies the currently selected autocomplete item.
+func (e *Editor) applyAutocompleteItem(item SelectItem) {
+	if e.autocompleteProvider == nil {
+		return
+	}
+
+	e.pushUndoSnapshot()
+	e.lastAction = ""
+
+	res := e.autocompleteProvider.ApplyCompletion(
+		e.state.lines,
+		e.state.cursorLine,
+		e.state.cursorCol,
+		AutocompleteItem{
+			Value:       item.Value,
+			Label:       item.Label,
+			Description: item.Description,
+		},
+		e.autocompletePrefix,
+	)
+	if res != nil {
+		e.state.lines = res.Lines
+		e.state.cursorLine = res.CursorLine
+		e.state.cursorCol = res.CursorCol
+	}
+
+	e.cancelAutocomplete()
+	if e.OnChange != nil {
+		e.OnChange(e.GetTextString())
 	}
 }

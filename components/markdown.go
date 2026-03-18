@@ -6,6 +6,8 @@ import (
 	"github.com/yeeaiclub/fasttui"
 )
 
+var _ fasttui.Component = (*Markdown)(nil)
+
 // DefaultTextStyle defines the default styling for markdown content
 type DefaultTextStyle struct {
 	Color         func(string) string

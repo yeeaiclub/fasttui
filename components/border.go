@@ -1,5 +1,9 @@
 package components
 
+import "github.com/yeeaiclub/fasttui"
+
+var _ fasttui.Component = (*DynamicBorder)(nil)
+
 type DynamicBorder struct {
 	color func(string) string
 }

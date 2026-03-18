@@ -162,7 +162,7 @@ func (app *ChatApp) handleSubmit(value string) {
 	case "/clear":
 		app.handleClearCommand()
 		return
-	case "git status":
+	case "/git status":
 		app.isResponding = true
 		app.showGitStatusConfirm()
 		return
@@ -178,6 +178,40 @@ func (app *ChatApp) handleSubmit(value string) {
 
 func (app *ChatApp) setupEditor() {
 	app.editor = components.NewEditor(app.term, app.handleSubmit)
+
+	commands := []any{
+		components.SlashCommand{
+			Name:        "delete",
+			Description: "Remove last message",
+		},
+		components.SlashCommand{
+			Name:        "clear",
+			Description: "Clear all messages",
+		},
+		components.AutocompleteItem{
+			Value:       "git status",
+			Label:       "git status",
+			Description: "Show the working tree status",
+		},
+	}
+
+	selectTheme := components.SelectListTheme{
+		SelectedPrefix: "→ ",
+		NormalPrefix:   "  ",
+		NoMatch: func(s string) string {
+			return "\x1b[2m" + s + "\x1b[0m"
+		},
+		ScrollInfo: func(s string) string {
+			return "\x1b[2m" + s + "\x1b[0m"
+		},
+		Description: func(s string) string {
+			return "\x1b[2m" + s + "\x1b[0m"
+		},
+	}
+
+	provider := components.NewCombinedAutocompleteProvider(commands, "", "fd")
+	app.editor.SetAutocomplete(provider, selectTheme, 8)
+
 	app.editor.OnCancel = func() {
 		// Double Ctrl+C to exit
 		now := time.Now()

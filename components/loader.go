@@ -2,12 +2,11 @@ package components
 
 import (
 	"time"
+
+	"github.com/yeeaiclub/fasttui"
 )
 
-// UIRenderer interface for components that need to trigger UI updates
-type UIRenderer interface {
-	TriggerRender()
-}
+var _ fasttui.Component = (*Loader)(nil)
 
 // Loader component that updates every 80ms with spinning animation
 type Loader struct {
@@ -16,7 +15,7 @@ type Loader struct {
 	currentFrame   int
 	ticker         *time.Ticker
 	stopChan       chan struct{}
-	ui             UIRenderer
+	ui             *fasttui.TUI
 	spinnerColorFn func(string) string
 	messageColorFn func(string) string
 	message        string
@@ -24,7 +23,7 @@ type Loader struct {
 }
 
 func NewLoader(
-	ui UIRenderer,
+	ui *fasttui.TUI,
 	spinnerColorFn func(string) string,
 	messageColorFn func(string) string,
 	message string,

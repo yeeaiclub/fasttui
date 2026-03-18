@@ -8,6 +8,8 @@ import (
 	"github.com/yeeaiclub/fasttui/keys"
 )
 
+var _ fasttui.Component = (*SelectList)(nil)
+
 type SelectItem struct {
 	Label       string
 	Value       string
