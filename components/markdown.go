@@ -334,12 +334,6 @@ func (m *Markdown) handleOrderedList(line string, result *[]string) bool {
 
 func (m *Markdown) handleParagraph(line string, i int, lines []string, result *[]string) {
 	*result = append(*result, m.renderInline(line))
-	if i+1 < len(lines) {
-		nextLine := strings.TrimSpace(lines[i+1])
-		if nextLine != "" && !strings.HasPrefix(nextLine, "-") && !strings.HasPrefix(nextLine, "*") {
-			*result = append(*result, "")
-		}
-	}
 }
 
 func (m *Markdown) renderInline(text string) string {

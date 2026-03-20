@@ -99,7 +99,7 @@ func (app *ChatApp) simulateResponse(loader *components.Loader) {
 		"## That makes sense to me.",
 		"## I hadn't thought of it that way.",
 		"## Great point!",
-		"**Thanks for sharing that.**",
+		"**Thanks for sharing that.**\nyes yes yes",
 	}
 	randomResponse := responses[rand.Intn(len(responses))]
 
