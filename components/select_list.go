@@ -36,14 +36,36 @@ type SelectList struct {
 	onSelectionChange func(item SelectItem)
 }
 
-func NewSelectList(items []SelectItem, maxVisible int, theme SelectListTheme) *SelectList {
-	return &SelectList{
+// SelectListOption configures theme and behavior of SelectList.
+type SelectListOption func(*SelectList)
+
+// WithSelectListTheme sets the theme used when rendering the select list.
+func WithSelectListTheme(theme SelectListTheme) SelectListOption {
+	return func(s *SelectList) {
+		s.theme = theme
+	}
+}
+
+// NewSelectList creates a SelectList with optional theming options.
+func NewSelectList(items []SelectItem, maxVisible int, opts ...SelectListOption) *SelectList {
+	s := &SelectList{
 		items:         items,
 		filteredItems: items,
 		selectedIndex: 0,
 		maxVisible:    maxVisible,
-		theme:         theme,
+		theme: SelectListTheme{
+			SelectedPrefix: "→ ",
+			NormalPrefix:   "  ",
+		},
 	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+
+	return s
 }
 
 func (s *SelectList) Render(width int) []string {

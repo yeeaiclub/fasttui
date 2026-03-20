@@ -9,7 +9,7 @@ import (
 )
 
 func TestNewText(t *testing.T) {
-	text := NewText("Hello", 1, 1, nil)
+	text := NewText("Hello", 1, 1)
 	require.NotNil(t, text, "NewText should not return nil")
 	assert.Equal(t, "Hello", text.text, "text should be 'Hello'")
 	assert.Equal(t, 1, text.paddingX, "paddingX should be 1")
@@ -17,20 +17,20 @@ func TestNewText(t *testing.T) {
 }
 
 func TestTextSetText(t *testing.T) {
-	text := NewText("Hello", 1, 1, nil)
+	text := NewText("Hello", 1, 1)
 	text.SetText("World")
 	assert.Equal(t, "World", text.text, "text should be updated to 'World'")
 	assert.False(t, text.cacheValid, "cache should be invalidated after SetText")
 }
 
 func TestTextRenderEmpty(t *testing.T) {
-	text := NewText("", 1, 1, nil)
+	text := NewText("", 1, 1)
 	result := text.Render(10)
 	assert.Empty(t, result, "result should be empty for empty text")
 }
 
 func TestTextRenderSimple(t *testing.T) {
-	text := NewText("Hello", 1, 0, nil)
+	text := NewText("Hello", 1, 0)
 	result := text.Render(10)
 
 	require.NotEmpty(t, result, "result should not be empty")
@@ -41,7 +41,7 @@ func TestTextRenderSimple(t *testing.T) {
 }
 
 func TestTextRenderWithPaddingY(t *testing.T) {
-	text := NewText("Hello", 1, 1, nil)
+	text := NewText("Hello", 1, 1)
 	result := text.Render(10)
 
 	// Should have: 1 empty line (top padding) + 1 content line + 1 empty line (bottom padding)
@@ -53,7 +53,7 @@ func TestTextRenderWithPaddingY(t *testing.T) {
 }
 
 func TestTextRenderWithWrapping(t *testing.T) {
-	text := NewText("Hello World", 1, 0, nil)
+	text := NewText("Hello World", 1, 0)
 	result := text.Render(8)
 
 	// With width 8 and paddingX 1, content width is 6
@@ -62,7 +62,7 @@ func TestTextRenderWithWrapping(t *testing.T) {
 }
 
 func TestTextRenderWithTabs(t *testing.T) {
-	text := NewText("Hello\tWorld", 0, 0, nil)
+	text := NewText("Hello\tWorld", 0, 0)
 	result := text.Render(20)
 
 	require.NotEmpty(t, result, "result should not be empty")
@@ -72,7 +72,7 @@ func TestTextRenderWithTabs(t *testing.T) {
 }
 
 func TestTextRenderCache(t *testing.T) {
-	text := NewText("Hello", 1, 1, nil)
+	text := NewText("Hello", 1, 1)
 
 	// First render
 	result1 := text.Render(10)
@@ -88,7 +88,7 @@ func TestTextRenderCache(t *testing.T) {
 }
 
 func TestTextInvalidate(t *testing.T) {
-	text := NewText("Hello", 1, 1, nil)
+	text := NewText("Hello", 1, 1)
 	text.Render(10)
 
 	assert.True(t, text.cacheValid, "cache should be valid after render")
@@ -102,7 +102,7 @@ func TestTextWithCustomBackground(t *testing.T) {
 		return "\x1b[44m" + s + "\x1b[0m" // Blue background
 	}
 
-	text := NewText("Hello", 1, 0, bgFn)
+	text := NewText("Hello", 1, 0, WithTextBackground(bgFn))
 	result := text.Render(10)
 
 	require.NotEmpty(t, result, "result should not be empty")
@@ -112,7 +112,7 @@ func TestTextWithCustomBackground(t *testing.T) {
 }
 
 func TestTextSetCustomBgFn(t *testing.T) {
-	text := NewText("Hello", 1, 1, nil)
+	text := NewText("Hello", 1, 1)
 	text.Render(10)
 
 	bgFn := func(s string) string {
