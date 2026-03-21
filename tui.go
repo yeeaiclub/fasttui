@@ -37,6 +37,8 @@ type TUI struct {
 	cursorRow          int
 	hardwareCursorRow  int
 	showHardwareCursor bool
+	// cursorHidden avoids sending HideCursor every frame; repeating ?25l causes flicker on some terminals.
+	cursorHidden bool
 
 	focusedComponent Component
 
@@ -586,7 +588,13 @@ func (t *TUI) setShowHardwareCursor(enabled bool) {
 	}
 	t.showHardwareCursor = enabled
 	if !enabled {
-		t.terminal.HideCursor()
+		if !t.cursorHidden {
+			t.terminal.HideCursor()
+			t.cursorHidden = true
+		}
+	} else {
+		t.terminal.ShowCursor()
+		t.cursorHidden = false
 	}
 }
 
@@ -639,7 +647,10 @@ func (t *TUI) GetShowHardwareCursor() bool {
 func (t *TUI) moveHardwareCursorTo(row int, col int, totalLines int) {
 	// Check if no cursor position was found (row == -1, col == -1)
 	if (row < 0 || col < 0) || totalLines <= 0 {
-		t.terminal.HideCursor()
+		if !t.cursorHidden {
+			t.terminal.HideCursor()
+			t.cursorHidden = true
+		}
 		return
 	}
 
@@ -665,8 +676,14 @@ func (t *TUI) moveHardwareCursorTo(row int, col int, totalLines int) {
 	t.hardwareCursorRow = targetRow
 
 	if t.showHardwareCursor {
-		t.terminal.ShowCursor()
+		if t.cursorHidden {
+			t.terminal.ShowCursor()
+			t.cursorHidden = false
+		}
 	} else {
-		t.terminal.HideCursor()
+		if !t.cursorHidden {
+			t.terminal.HideCursor()
+			t.cursorHidden = true
+		}
 	}
 }

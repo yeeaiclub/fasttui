@@ -439,10 +439,10 @@ func (e *Editor) renderLineWithCursor(line LayoutLine, contentWidth, paddingX in
 			firstGrapheme = string(afterRunes[0])
 			restAfter = string(afterRunes[1:])
 		}
-		cursor := "\x1b[7m" + firstGrapheme + "\x1b[0m"
+		cursor := "\x1b[7m" + firstGrapheme + "\x1b[27m"
 		displayText = before + marker + cursor + restAfter
 	} else {
-		cursor := "\x1b[7m \x1b[0m"
+		cursor := "\x1b[7m \x1b[27m"
 		displayText = before + marker + cursor
 		lineVisibleWidth = lineVisibleWidth + 1
 		if lineVisibleWidth > contentWidth && paddingX > 0 {
