@@ -494,7 +494,7 @@ func (e *Editor) fillWithHorizontal(width int) string {
 }
 
 func (e *Editor) IsFocused() bool {
-	return true
+	return e.focused
 }
 
 func (e *Editor) SetFocused(focused bool) {

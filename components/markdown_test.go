@@ -80,7 +80,7 @@ func TestApplyPaddingAndBackground_WithBgFn(t *testing.T) {
 
 	require.Len(t, result, 3)
 	assert.Contains(t, wrapped, "[   ]", "bgFn should be applied to empty padding lines")
-	assert.Equal(t, "a  ", result[1], "content line unchanged by bgFn in this impl")
+	assert.Equal(t, "[a  ]", result[1], "bgFn should be applied to content lines")
 }
 
 func TestApplyPaddingAndBackground_NoExceedWidth(t *testing.T) {

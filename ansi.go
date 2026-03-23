@@ -1,5 +1,7 @@
 package fasttui
 
+import "strings"
+
 const (
 	CursorMarker = "\x1b_pi:c\x07"
 	SegmentReset = "\x1b[0m\x1b]8;;\x07"
@@ -47,6 +49,27 @@ func ExtractAnsiCode(s string, pos int) (code string, length int, ok bool) {
 	}
 
 	return "", 0, false
+}
+
+// StripAnsi removes every escape sequence recognized by ExtractAnsiCode from s.
+// Lone ESC bytes and incomplete or unsupported sequences are left unchanged.
+func StripAnsi(s string) string {
+	if !strings.Contains(s, "\x1b") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		if s[i] == '\x1b' {
+			if _, n, ok := ExtractAnsiCode(s, i); ok {
+				i += n
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
 }
 
 func extractOscOrApc(s string, pos int) (code string, length int, ok bool) {

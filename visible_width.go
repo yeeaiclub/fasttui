@@ -1,7 +1,6 @@
 package fasttui
 
 import (
-	"regexp"
 	"strings"
 	"sync"
 
@@ -15,9 +14,6 @@ const (
 var (
 	widthCache      = make(map[string]int)
 	widthCacheMutex sync.RWMutex
-	ansiCSIPattern  = regexp.MustCompile(`\x1b\[[0-9;]*[mGKHJ]`)
-	ansiOSCPattern  = regexp.MustCompile(`\x1b\]8;;[^\x07]*\x07`)
-	ansiAPCPattern  = regexp.MustCompile(`\x1b_[^\x07\x1b]*(\x07|\x1b\\)`)
 )
 
 // VisibleWidth calculates the display width of a string, handling:
@@ -59,9 +55,7 @@ func VisibleWidth(s string) int {
 		clean = strings.ReplaceAll(clean, "\t", "   ")
 	}
 	if strings.Contains(clean, "\x1b") {
-		clean = ansiCSIPattern.ReplaceAllString(clean, "")
-		clean = ansiOSCPattern.ReplaceAllString(clean, "")
-		clean = ansiAPCPattern.ReplaceAllString(clean, "")
+		clean = StripAnsi(clean)
 	}
 
 	// Calculate width using grapheme segmentation
