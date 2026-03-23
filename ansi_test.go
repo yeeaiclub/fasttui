@@ -138,3 +138,25 @@ func TestExtractAnsiCode(t *testing.T) {
 		})
 	}
 }
+
+func TestStripAnsi(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"plain", "hello", "hello"},
+		{"csi only", "\x1b[31mred\x1b[0m", "red"},
+		{"osc bel", "a\x1b]8;;u\x07b", "ab"},
+		{"osc st", "x\x1b]0;t\x1b\\y", "xy"},
+		{"apc", "a\x1b_pi:c\x07b", "ab"},
+		{"mixed", "\x1b[1m\x1b]8;;\x07\x1b[0mok", "ok"},
+		{"lone esc", "a\x1bb", "a\x1bb"},
+		{"incomplete csi", "a\x1b[31b", "a\x1b[31b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, StripAnsi(tt.input))
+		})
+	}
+}
