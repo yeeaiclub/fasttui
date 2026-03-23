@@ -16,8 +16,11 @@ var (
 	widthCache      = make(map[string]int)
 	widthCacheMutex sync.RWMutex
 	ansiCSIPattern  = regexp.MustCompile(`\x1b\[[0-9;]*[mGKHJ]`)
-	ansiOSCPattern  = regexp.MustCompile(`\x1b\]8;;[^\x07]*\x07`)
-	ansiAPCPattern  = regexp.MustCompile(`\x1b_[^\x07\x1b]*(\x07|\x1b\\)`)
+	// BEL-terminated OSC (hyperlinks, shell integration 133;A/B/C, title, etc.)
+	ansiOSCBELPattern = regexp.MustCompile(`\x1b\][^\x07]*\x07`)
+	// ST-terminated OSC (payload must not contain ESC or BEL)
+	ansiOSCSTPattern = regexp.MustCompile(`\x1b\][^\x07\x1b]*\x1b\\`)
+	ansiAPCPattern   = regexp.MustCompile(`\x1b_[^\x07\x1b]*(\x07|\x1b\\)`)
 )
 
 // VisibleWidth calculates the display width of a string, handling:
@@ -60,7 +63,8 @@ func VisibleWidth(s string) int {
 	}
 	if strings.Contains(clean, "\x1b") {
 		clean = ansiCSIPattern.ReplaceAllString(clean, "")
-		clean = ansiOSCPattern.ReplaceAllString(clean, "")
+		clean = ansiOSCBELPattern.ReplaceAllString(clean, "")
+		clean = ansiOSCSTPattern.ReplaceAllString(clean, "")
 		clean = ansiAPCPattern.ReplaceAllString(clean, "")
 	}
 
