@@ -41,6 +41,11 @@ func TestVisibleWidth(t *testing.T) {
 			expected: 4, // "link"
 		},
 		{
+			name: "OSC 133 shell integration (zero visible width)",
+			input: "\x1b]133;A\x07" + "hello" + "\x1b]133;B\x07\x1b]133;C\x07",
+			expected: 5,
+		},
+		{
 			name:     "string with APC sequences",
 			input:    "\x1b_test\x07content",
 			expected: 7, // "content"

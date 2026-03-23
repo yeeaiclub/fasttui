@@ -215,10 +215,11 @@ func (t *TUI) doRender() {
 		return
 	}
 
-	// Check if firstChanged is outside the viewport
-	// Viewport is based on max lines ever rendered (terminal's working area)
-	if firstChangedIdx < viewportTop {
-		// First change is above viewport - need full re-render
+	// If first change is above what was visible last frame, incremental draw cannot reach it.
+	// Use len(previousLines) (not maxLinesRendered) so content shrink does not inflate viewportTop
+	// and force false full re-renders.
+	previousContentViewportTop := max(0, len(t.previousLines)-height)
+	if firstChangedIdx < previousContentViewportTop {
 		fullRender.Render(true)
 		return
 	}

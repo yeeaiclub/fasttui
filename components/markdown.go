@@ -537,6 +537,9 @@ func (m *Markdown) applyPaddingAndBackground(lines []string, width int) []string
 			} else if visibleLen < width {
 				lineWithMargins = lineWithMargins + strings.Repeat(" ", width-visibleLen)
 			}
+			if bgFn != nil {
+				lineWithMargins = bgFn(lineWithMargins)
+			}
 			contentLines = append(contentLines, lineWithMargins)
 		}
 	}
