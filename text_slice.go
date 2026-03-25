@@ -1,6 +1,10 @@
 package fasttui
 
-import "github.com/clipperhouse/uax29/v2/graphemes"
+import (
+	"strings"
+
+	"github.com/clipperhouse/uax29/v2/graphemes"
+)
 
 func SliceByColumn(line string, startCol int, length int, strict bool) string {
 	result := SliceWithWidth(line, startCol, length, strict)
@@ -13,7 +17,7 @@ func SliceWithWidth(line string, startCol int, length int, strict bool) SliceRes
 	}
 
 	endCol := startCol + length
-	result := ""
+	var result strings.Builder
 	resultWidth := 0
 	currentCol := 0
 	i := 0
@@ -23,7 +27,7 @@ func SliceWithWidth(line string, startCol int, length int, strict bool) SliceRes
 		code, codeLen, ok := ExtractAnsiCode(line, i)
 		if ok {
 			if currentCol >= startCol && currentCol < endCol {
-				result += code
+				result.WriteString(code)
 			} else if currentCol < startCol {
 				pendingAnsi += code
 			}
@@ -40,7 +44,6 @@ func SliceWithWidth(line string, startCol int, length int, strict bool) SliceRes
 		}
 
 		textPortion := line[i:textEnd]
-		// Use grapheme segmentation for proper Unicode handling
 		g := graphemes.FromString(textPortion)
 		for g.Next() {
 			grapheme := g.Value()
@@ -49,10 +52,10 @@ func SliceWithWidth(line string, startCol int, length int, strict bool) SliceRes
 			fits := !strict || currentCol+w <= endCol
 			if inRange && fits {
 				if pendingAnsi != "" {
-					result += pendingAnsi
+					result.WriteString(pendingAnsi)
 					pendingAnsi = ""
 				}
-				result += grapheme
+				result.WriteString(grapheme)
 				resultWidth += w
 			}
 			currentCol += w
@@ -66,13 +69,12 @@ func SliceWithWidth(line string, startCol int, length int, strict bool) SliceRes
 		}
 	}
 
-	return SliceResult{text: result, width: resultWidth}
+	return SliceResult{text: result.String(), width: resultWidth}
 }
 
 func ExtractSegments(line string, beforeEnd int, afterStart int, afterLen int, strictAfter bool) (string, int, string, int) {
-	before := ""
+	var before, after strings.Builder
 	beforeWidth := 0
-	after := ""
 	afterWidth := 0
 	currentCol := 0
 	i := 0
@@ -80,17 +82,16 @@ func ExtractSegments(line string, beforeEnd int, afterStart int, afterLen int, s
 	afterStarted := false
 	afterEnd := afterStart + afterLen
 
-	pooledStyleTracker := NewAnsiCodeTracker()
-	pooledStyleTracker.Clear()
+	tracker := NewAnsiCodeTracker()
 
 	for i < len(line) {
 		code, codeLen, ok := ExtractAnsiCode(line, i)
 		if ok {
-			pooledStyleTracker.Process(code)
+			tracker.Process(code)
 			if currentCol < beforeEnd {
 				pendingAnsiBefore += code
 			} else if currentCol >= afterStart && currentCol < afterEnd && afterStarted {
-				after += code
+				after.WriteString(code)
 			}
 			i += codeLen
 			continue
@@ -105,7 +106,6 @@ func ExtractSegments(line string, beforeEnd int, afterStart int, afterLen int, s
 		}
 
 		textPortion := line[i:textEnd]
-		// Use grapheme segmentation for proper Unicode handling
 		g := graphemes.FromString(textPortion)
 		for g.Next() {
 			grapheme := g.Value()
@@ -113,45 +113,46 @@ func ExtractSegments(line string, beforeEnd int, afterStart int, afterLen int, s
 
 			if currentCol < beforeEnd {
 				if pendingAnsiBefore != "" {
-					before += pendingAnsiBefore
+					before.WriteString(pendingAnsiBefore)
 					pendingAnsiBefore = ""
 				}
-				before += grapheme
+				before.WriteString(grapheme)
 				beforeWidth += w
 			} else if currentCol >= afterStart && currentCol < afterEnd {
 				fits := !strictAfter || currentCol+w <= afterEnd
 				if fits {
 					if !afterStarted {
-						after += pooledStyleTracker.GetActiveCodes()
+						after.WriteString(tracker.GetActiveCodes())
 						afterStarted = true
 					}
-					after += grapheme
+					after.WriteString(grapheme)
 					afterWidth += w
 				}
 			}
 
 			currentCol += w
-			if afterLen <= 0 {
-				if currentCol >= beforeEnd {
-					break
-				}
-			} else {
-				if currentCol >= afterEnd {
-					break
-				}
+
+			// Determine break point and check once
+			breakPoint := beforeEnd
+			if afterLen > 0 {
+				breakPoint = afterEnd
+			}
+			if currentCol >= breakPoint {
+				break
 			}
 		}
+
 		i = textEnd
-		if afterLen <= 0 {
-			if currentCol >= beforeEnd {
-				break
-			}
-		} else {
-			if currentCol >= afterEnd {
-				break
-			}
+
+		// Same consolidated break condition for outer loop
+		breakPoint := beforeEnd
+		if afterLen > 0 {
+			breakPoint = afterEnd
+		}
+		if currentCol >= breakPoint {
+			break
 		}
 	}
 
-	return before, beforeWidth, after, afterWidth
+	return before.String(), beforeWidth, after.String(), afterWidth
 }
