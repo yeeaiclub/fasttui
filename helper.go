@@ -1,62 +1,8 @@
 package fasttui
 
 import (
-	"regexp"
-	"strconv"
 	"strings"
 )
-
-// Layout Parsing Functions
-
-// parseSizeValue parses a size value which can be either an absolute pixel value (int)
-// or a percentage string (e.g., "50%"). When a percentage is provided, it calculates
-// the size based on the total available space. Returns 0 for invalid or negative values.
-func parseSizeValue(value any, total int) int {
-	if value == nil {
-		return 0
-	}
-
-	switch v := value.(type) {
-	case int:
-		if v <= 0 {
-			return 0
-		}
-		return v
-	case string:
-		match := regexp.MustCompile(`^(\d+(?:\.\d+)?)%$`).FindStringSubmatch(v)
-		if match != nil {
-			percentage, err := strconv.ParseFloat(match[1], 64)
-			if err == nil {
-				result := int((float64(total) * percentage) / 100)
-				if result <= 0 {
-					return 0
-				}
-				return result
-			}
-		}
-	}
-
-	return 0
-}
-
-// parseMargin parses margin values which can be either:
-// - An int: applies the same margin to all sides
-// - A map[string]int: specifies individual margins for top, right, bottom, left
-// Returns 0 for any negative margin values or unsupported types.
-func parseMargin(margin any) (marginTop, marginRight, marginBottom, marginLeft int) {
-	if margin == nil {
-		return 0, 0, 0, 0
-	}
-
-	switch v := margin.(type) {
-	case int:
-		return max(0, v), max(0, v), max(0, v), max(0, v)
-	case map[string]int:
-		return max(0, v["top"]), max(0, v["right"]), max(0, v["bottom"]), max(0, v["left"])
-	default:
-		return 0, 0, 0, 0
-	}
-}
 
 // Cursor Handling Functions
 

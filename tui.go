@@ -601,7 +601,7 @@ func (t *TUI) setShowHardwareCursor(enabled bool) {
 
 func (t *TUI) SetClearOnShrink(enabled bool) {
 	select {
-	case t.queryChan <- QueryRequest{action: "setClearOnShrink_" + fmt.Sprintf("%v", enabled), response: make(chan interface{}, 1)}:
+	case t.queryChan <- QueryRequest{action: "setClearOnShrink_" + fmt.Sprintf("%v", enabled), response: make(chan any, 1)}:
 	case <-t.stopChan:
 	}
 }

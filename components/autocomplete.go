@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -55,7 +56,7 @@ type CombinedAutocompleteProvider struct {
 }
 
 // NewCombinedAutocompleteProvider creates a new combined autocomplete provider
-func NewCombinedAutocompleteProvider(commands []interface{}, basePath, fdPath string) *CombinedAutocompleteProvider {
+func NewCombinedAutocompleteProvider(commands []any, basePath, fdPath string) *CombinedAutocompleteProvider {
 	if basePath == "" {
 		basePath, _ = os.Getwd()
 	}
@@ -331,7 +332,7 @@ func (p *CombinedAutocompleteProvider) getCommandItems() []commandItem {
 	return items
 }
 
-func (p *CombinedAutocompleteProvider) findCommand(name string) interface{} {
+func (p *CombinedAutocompleteProvider) findCommand(name string) any {
 	for _, cmd := range p.commands {
 		switch c := cmd.(type) {
 		case SlashCommand:
@@ -620,7 +621,7 @@ func walkDirectoryWithFd(baseDir, fdPath, query string, maxResults int) []struct
 } {
 	args := []string{
 		"--base-directory", baseDir,
-		"--max-results", string(rune(maxResults)),
+		"--max-results", strconv.Itoa(maxResults),
 		"--type", "f",
 		"--type", "d",
 		"--full-path",
