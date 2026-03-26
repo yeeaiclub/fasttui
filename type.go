@@ -1,9 +1,14 @@
 package fasttui
 
+// Component: render + keyboard input.
 type Component interface {
+	// Render returns terminal lines for the given width.
 	Render(width int) []string
+	// HandleInput handles raw input when focused.
 	HandleInput(data string)
+	// WantsKeyRelease: receive key-up events.
 	WantsKeyRelease() bool
+	// Invalidate clears cached render state.
 	Invalidate()
 }
 
