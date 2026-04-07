@@ -1,5 +1,8 @@
 name: "CodeQL Analysis"
-permissions: read-all
+permissions:
+  security-events: write
+  actions: read
+  contents: read
 on:
   workflow_dispatch:
   schedule:
@@ -35,3 +38,6 @@ jobs:
         uses: github/codeql-action/autobuild@v3
 
       - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:go"
