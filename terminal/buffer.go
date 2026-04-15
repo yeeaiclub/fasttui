@@ -171,6 +171,17 @@ func (s *StdinBuffer) processEscape() bool {
 func (s *StdinBuffer) processCSI() bool {
 	// CSI sequences: ESC [ ... final_byte
 	// final_byte is in range 0x40-0x7E
+	// Special case: old mouse sequence ESC [ M followed by 3 bytes.
+	if strings.HasPrefix(s.buffer, "\x1b[M") {
+		if len(s.buffer) < 6 {
+			return false
+		}
+		s.emitData(s.buffer[:6])
+		s.buffer = s.buffer[6:]
+		s.state = StateNormal
+		return true
+	}
+
 	for i := 2; i < len(s.buffer); i++ {
 		ch := s.buffer[i]
 		if ch >= 0x40 && ch <= 0x7E {
