@@ -214,19 +214,19 @@ func clamp255(x float64) int {
 }
 
 func rgbToHSV(r, g, b float64) (h, s, v float64) {
-	max := math.Max(r, math.Max(g, b))
-	min := math.Min(r, math.Min(g, b))
-	d := max - min
-	v = max
-	if max == 0 {
+	maxv := math.Max(r, math.Max(g, b))
+	minv := math.Min(r, math.Min(g, b))
+	d := maxv - minv
+	v = maxv
+	if maxv == 0 {
 		return 0, 0, v
 	}
-	s = d / max
+	s = d / maxv
 	if d == 0 {
 		return 0, s, v
 	}
 	var hh float64
-	switch max {
+	switch maxv {
 	case r:
 		hh = math.Mod((g-b)/d, 6)
 	case g:

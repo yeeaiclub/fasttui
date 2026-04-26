@@ -1,6 +1,3 @@
-// Code generated from oh-my-pi theme.ts; nerd/ascii maps use explicit \u/\U escapes (ASCII source).
-//go:generate echo "regenerate: fetch packages/coding-agent/src/modes/theme/theme.ts and run tools/gen_symbol_presets.py"
-
 package style
 
 // SpinnerType selects spinner animation sets.
