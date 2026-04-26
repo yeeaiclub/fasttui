@@ -37,12 +37,12 @@ func LoadThemeFile(name string) (*ThemeFile, error) {
 }
 
 // LoadTheme is shorthand for [LoadThemeFile] + [NewTheme] with options.
-func LoadTheme(name string, opt CreateThemeOptions) (*Theme, error) {
+func LoadTheme(name string, opts ...ThemeOption) (*Theme, error) {
 	tf, err := LoadThemeFile(name)
 	if err != nil {
 		return nil, err
 	}
-	return NewTheme(tf, opt)
+	return NewTheme(tf, opts...)
 }
 
 // ListThemeNames returns builtin names plus any *.json in [ThemesDir] (sorted, unique).

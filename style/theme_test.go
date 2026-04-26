@@ -18,7 +18,7 @@ func TestParseDarkBuiltin(t *testing.T) {
 	if tf.Name != "dark" {
 		t.Fatalf("name: got %q", tf.Name)
 	}
-	th, err := NewTheme(tf, CreateThemeOptions{Mode: ColorModeTruecolor})
+	th, err := NewTheme(tf, WithColorMode(ColorModeTruecolor))
 	if err != nil {
 		t.Fatal(err)
 	}

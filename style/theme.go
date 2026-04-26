@@ -6,11 +6,33 @@ import (
 	"strings"
 )
 
-// CreateThemeOptions configures how a [ThemeFile] is compiled to terminal ANSI.
-type CreateThemeOptions struct {
+// ThemeConfig holds optional fields for [NewTheme]. The zero value means: detect color mode, use
+// symbol preset from theme JSON, and color-blind mode off. Options apply in order; later options override earlier ones.
+type ThemeConfig struct {
 	Mode           ColorMode
 	SymbolPreset   *SymbolPreset // if non-nil, overrides theme JSON symbols.preset
 	ColorBlindMode bool
+}
+
+// ThemeOption configures [NewTheme] and [LoadTheme] via the functional options pattern.
+type ThemeOption func(*ThemeConfig)
+
+// WithColorMode sets the terminal color mode. An empty [ColorMode] (or omitting this option) uses [DetectColorMode].
+func WithColorMode(m ColorMode) ThemeOption {
+	return func(c *ThemeConfig) { c.Mode = m }
+}
+
+// WithSymbolPreset forces a symbol preset, overriding the theme file's symbols.preset.
+func WithSymbolPreset(p SymbolPreset) ThemeOption {
+	return func(c *ThemeConfig) {
+		x := p
+		c.SymbolPreset = &x
+	}
+}
+
+// WithColorBlindMode shifts toolDiffAdded (green) toward blue when true.
+func WithColorBlindMode(on bool) ThemeOption {
+	return func(c *ThemeConfig) { c.ColorBlindMode = on }
 }
 
 // Theme holds resolved ANSI sequences and the active symbol table.
@@ -23,8 +45,12 @@ type Theme struct {
 }
 
 // NewTheme builds a [Theme] from validated theme data.
-func NewTheme(tf *ThemeFile, opt CreateThemeOptions) (*Theme, error) {
-	mode := opt.Mode
+func NewTheme(tf *ThemeFile, opts ...ThemeOption) (*Theme, error) {
+	var cfg ThemeConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	mode := cfg.Mode
 	if mode == "" {
 		mode = DetectColorMode()
 	}
@@ -32,7 +58,7 @@ func NewTheme(tf *ThemeFile, opt CreateThemeOptions) (*Theme, error) {
 	if err != nil {
 		return nil, err
 	}
-	if opt.ColorBlindMode {
+	if cfg.ColorBlindMode {
 		if rc, ok := resolved["toolDiffAdded"]; ok && !rc.IsIdx && strings.HasPrefix(rc.Hex, "#") {
 			h, err := applyColorblindAdjustment(rc.Hex)
 			if err == nil {
@@ -63,8 +89,8 @@ func NewTheme(tf *ThemeFile, opt CreateThemeOptions) (*Theme, error) {
 	if tf.Symbols != nil && tf.Symbols.Preset != nil {
 		preset = *tf.Symbols.Preset
 	}
-	if opt.SymbolPreset != nil {
-		preset = *opt.SymbolPreset
+	if cfg.SymbolPreset != nil {
+		preset = *cfg.SymbolPreset
 	}
 	base, ok := symbolPresetMaps[preset]
 	if !ok {
