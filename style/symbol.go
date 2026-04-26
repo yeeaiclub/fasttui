@@ -1,6 +1,16 @@
 package style
 
-var SymbolMap = map[string]string{
+// SymbolPreset selects which glyph set to use for UI symbols.
+type SymbolPreset string
+
+const (
+	SymbolPresetUnicode SymbolPreset = "unicode"
+	SymbolPresetNerd    SymbolPreset = "nerd"
+	SymbolPresetAscii   SymbolPreset = "ascii"
+)
+
+// UnicodeSymbolMap is the default Unicode / emoji-heavy symbol table.
+var UnicodeSymbolMap = map[string]string{
 	// Status
 	"status.success":  "✔",
 	"status.error":    "✘",
@@ -156,4 +166,28 @@ var SymbolMap = map[string]string{
 	"tab.tools":       "🔧",
 	"tab.tasks":       "📦",
 	"tab.providers":   "🌐",
+}
+
+// SymbolMap is an alias of [UnicodeSymbolMap] for backward compatibility.
+var SymbolMap = UnicodeSymbolMap
+
+var symbolPresetMaps = map[SymbolPreset]map[string]string{
+	SymbolPresetUnicode: UnicodeSymbolMap,
+	SymbolPresetNerd:    nerdSymbolMap,
+	SymbolPresetAscii:   asciiSymbolMap,
+}
+
+// AvailableSymbolPresets lists supported symbol presets.
+func AvailableSymbolPresets() []SymbolPreset {
+	return []SymbolPreset{SymbolPresetUnicode, SymbolPresetNerd, SymbolPresetAscii}
+}
+
+// ValidSymbolPreset reports whether s is a known preset name.
+func ValidSymbolPreset(s string) bool {
+	switch SymbolPreset(s) {
+	case SymbolPresetUnicode, SymbolPresetNerd, SymbolPresetAscii:
+		return true
+	default:
+		return false
+	}
 }
