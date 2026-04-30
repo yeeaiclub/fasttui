@@ -44,6 +44,8 @@ type TUI struct {
 	inputBuffer          strings.Builder
 
 	clearOnShrink bool
+
+	eventLoopDone chan struct{}
 }
 
 func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
@@ -57,10 +59,13 @@ func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 		showHardwareCursor: showHardwareCursor,
 		previousLines:      nil,
 	}
+	t.eventLoopDone = make(chan struct{})
+	close(t.eventLoopDone)
 	return t
 }
 
 func (t *TUI) Start() {
+	t.eventLoopDone = make(chan struct{})
 	t.start()
 	go t.eventLoop()
 }
@@ -69,6 +74,7 @@ func (t *TUI) Stop() {
 	if !t.stopped {
 		t.stopped = true
 		close(t.stopChan)
+		<-t.eventLoopDone
 		t.terminal.Stop()
 	}
 }
@@ -90,6 +96,8 @@ func (t *TUI) ForceRender() {
 }
 
 func (t *TUI) eventLoop() {
+	defer close(t.eventLoopDone)
+
 	pendingRender := false
 	forceRender := false
 

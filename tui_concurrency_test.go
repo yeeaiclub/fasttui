@@ -1,7 +1,9 @@
 package fasttui
 
 import (
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -336,5 +338,74 @@ func TestContainerOpsBeforeStart(t *testing.T) {
 
 	if len(tui.GetChildren()) != 3 {
 		t.Errorf("Expected 3 children after start, got %d", len(tui.GetChildren()))
+	}
+}
+
+type stopRaceTerminal struct {
+	writeStarted chan struct{}
+	allowWrite   chan struct{}
+	startedOnce  sync.Once
+	stopped      atomic.Bool
+	hideAfterStop atomic.Int32
+}
+
+func newStopRaceTerminal() *stopRaceTerminal {
+	return &stopRaceTerminal{
+		writeStarted: make(chan struct{}),
+		allowWrite:   make(chan struct{}),
+	}
+}
+
+func (m *stopRaceTerminal) Start(onInput func(data string), onResize func()) error { return nil }
+func (m *stopRaceTerminal) Stop()                                                  { m.stopped.Store(true) }
+func (m *stopRaceTerminal) Write(data string) {
+	if strings.Contains(data, SyncOutputBegin) {
+		m.startedOnce.Do(func() { close(m.writeStarted) })
+		<-m.allowWrite
+	}
+}
+func (m *stopRaceTerminal) GetSize() (int, int)        { return 80, 24 }
+func (m *stopRaceTerminal) IsKittyProtocolActive() bool { return false }
+func (m *stopRaceTerminal) MoveBy(lines int)            {}
+func (m *stopRaceTerminal) HideCursor() {
+	if m.stopped.Load() {
+		m.hideAfterStop.Add(1)
+	}
+}
+func (m *stopRaceTerminal) ShowCursor()           {}
+func (m *stopRaceTerminal) ClearLine()            {}
+func (m *stopRaceTerminal) ClearFromCursor()      {}
+func (m *stopRaceTerminal) ClearScreen()          {}
+func (m *stopRaceTerminal) SetTitle(title string) {}
+
+// TestStopWaitsForRenderCompletion ensures terminal.Stop is called after in-flight render exits.
+func TestStopWaitsForRenderCompletion(t *testing.T) {
+	term := newStopRaceTerminal()
+	tui := NewTUI(term, false)
+	tui.Start()
+
+	select {
+	case <-term.writeStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for render write to start")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		tui.Stop()
+		close(done)
+	}()
+
+	// Release blocked write so render can complete and event loop can exit.
+	close(term.allowWrite)
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Stop did not return in time")
+	}
+
+	if got := term.hideAfterStop.Load(); got != 0 {
+		t.Fatalf("expected no HideCursor after terminal stop, got %d", got)
 	}
 }
