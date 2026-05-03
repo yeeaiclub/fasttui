@@ -87,7 +87,7 @@ func extractOscOrApc(s string, pos int) (code string, length int, ok bool) {
 }
 
 func isTerminator(b byte) bool {
-	return b == 'm' || b == 'G' || b == 'K' || b == 'H' || b == 'J'
+	return b >= 0x40 && b <= 0x7E
 }
 
 func updateTrackerFromText(text string, tracker *AnsiCodeTracker) {
