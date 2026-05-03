@@ -2,20 +2,19 @@ package terminal
 
 import (
 	"os"
-	"os/signal"
 	"regexp"
 	"strconv"
+	"sync"
 	"time"
-
-	"golang.org/x/term"
 )
 
 var kittyResponsePattern = regexp.MustCompile(`^\x1b\[\?(\d+)u$`)
 
 type ProcessTerminal struct {
 	buffer                *StdinBuffer
-	oldState              *term.State
-	fd                    int
+	rawState              *rawModeState
+	stdinFD               int
+	stdoutFD              int
 	isKittyProtocolActive bool
 	inputHandler          func(data string)
 	stdinDataBuffer       func(data []byte)
@@ -23,12 +22,16 @@ type ProcessTerminal struct {
 	resizeHandler         func()
 	resizeSignalChan      chan os.Signal
 	stopChan              chan struct{}
+	stopOnce              sync.Once
+	stopResizeSignal      func()
 }
 
 func NewProcessTerminal() *ProcessTerminal {
 	buffer := NewStdinBuffer()
 	return &ProcessTerminal{
 		buffer:                buffer,
+		stdinFD:               int(os.Stdin.Fd()),
+		stdoutFD:              int(os.Stdout.Fd()),
 		isKittyProtocolActive: false,
 		wasRaw:                false,
 		resizeSignalChan:      make(chan os.Signal, 1),
@@ -37,7 +40,7 @@ func NewProcessTerminal() *ProcessTerminal {
 }
 
 func (p *ProcessTerminal) GetSize() (int, int) {
-	w, h, err := term.GetSize(int(os.Stdout.Fd()))
+	w, h, err := getTerminalSize(p.stdoutFD)
 	if err != nil {
 		return 80, 24
 	}
@@ -53,12 +56,11 @@ func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) erro
 	p.resizeHandler = onResize
 
 	// Save previous state and enable raw mode on STDIN (not stdout!)
-	p.fd = int(os.Stdin.Fd())
-	oldState, err := term.MakeRaw(p.fd)
+	rawState, err := enableRawMode(p.stdinFD)
 	if err != nil {
 		return err
 	}
-	p.oldState = oldState
+	p.rawState = rawState
 
 	// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 	p.print("\x1b[?2004h")
@@ -67,7 +69,7 @@ func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) erro
 	p.queryAndEnableKittyProtocol()
 
 	// Set up resize signal handling
-	signal.Notify(p.resizeSignalChan, os.Interrupt)
+	p.stopResizeSignal = registerResizeSignal(p.resizeSignalChan)
 	go p.handleResizeSignal()
 
 	// Start reading input in background
@@ -208,50 +210,56 @@ func (p *ProcessTerminal) DrainInput(maxMs int, idleMs int) error {
 }
 
 func (p *ProcessTerminal) Stop() {
-	// Signal goroutines to stop
-	close(p.stopChan)
+	p.stopOnce.Do(func() {
+		// Signal goroutines to stop
+		close(p.stopChan)
 
-	// Disable bracketed paste mode
-	p.print("\x1b[?2004l")
+		// Disable bracketed paste mode
+		p.print("\x1b[?2004l")
 
-	// Disable Kitty keyboard protocol (pop the flags we pushed) - only if we enabled it
-	if p.isKittyProtocolActive {
-		p.print("\x1b[<u")
-		p.isKittyProtocolActive = false
-	}
+		// Disable Kitty keyboard protocol (pop the flags we pushed) - only if we enabled it
+		if p.isKittyProtocolActive {
+			p.print("\x1b[<u")
+			p.isKittyProtocolActive = false
+		}
 
-	// Show cursor (ensure it's visible after exit)
-	p.print("\x1b[?25h")
+		// Show cursor (ensure it's visible after exit)
+		p.print("\x1b[?25h")
 
-	// Reset SGR (colors, etc)
-	p.print("\x1b[0m")
+		// Reset SGR (colors, etc)
+		p.print("\x1b[0m")
 
-	// Move cursor down 4 lines to avoid overwriting last rendered content
-	p.print("\r\n\r\n\r\n\r\n")
+		// Move cursor down 4 lines to avoid overwriting last rendered content
+		p.print("\r\n\r\n\r\n\r\n")
 
-	// Clean up StdinBuffer
-	if p.buffer != nil {
-		p.buffer.Close()
-		p.buffer = nil
-	}
+		// Clean up StdinBuffer
+		if p.buffer != nil {
+			p.buffer.Close()
+			p.buffer = nil
+		}
 
-	// Remove event handlers
-	p.stdinDataBuffer = nil
-	p.inputHandler = nil
-	p.resizeHandler = nil
+		// Remove event handlers
+		p.stdinDataBuffer = nil
+		p.inputHandler = nil
+		p.resizeHandler = nil
 
-	// Stop signal notifications
-	signal.Stop(p.resizeSignalChan)
+		// Stop signal notifications
+		if p.stopResizeSignal != nil {
+			p.stopResizeSignal()
+			p.stopResizeSignal = nil
+		}
 
-	// Wait a moment for goroutines to exit
-	time.Sleep(50 * time.Millisecond)
+		// Wait a moment for goroutines to exit
+		time.Sleep(50 * time.Millisecond)
 
-	// Restore terminal state
-	if p.oldState != nil {
-		// Clear any read deadline before restoring
-		os.Stdin.SetReadDeadline(time.Time{})
-		term.Restore(p.fd, p.oldState)
-	}
+		// Restore terminal state
+		if p.rawState != nil {
+			// Clear any read deadline before restoring
+			os.Stdin.SetReadDeadline(time.Time{})
+			_ = disableRawMode(p.rawState)
+			p.rawState = nil
+		}
+	})
 }
 
 func (p *ProcessTerminal) Write(data string) {

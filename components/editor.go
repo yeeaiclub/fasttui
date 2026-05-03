@@ -378,7 +378,11 @@ func (e *Editor) Render(width int) []string {
 		padding := strings.Repeat(" ", max(0, contentWidth-lineVisibleWidth))
 		var lineRenderPadding string
 		if cursorInPadding {
-			lineRenderPadding = string(rightPadding[1])
+			if len(rightPadding) > 0 {
+				lineRenderPadding = rightPadding[1:]
+			} else {
+				lineRenderPadding = ""
+			}
 		} else {
 			lineRenderPadding = rightPadding
 		}
@@ -943,12 +947,14 @@ func (e *Editor) handleForwardDelete() {
 	if e.state.cursorCol < len(currentLine) {
 		e.pushUndoSnapshot()
 
-		runes := []rune(currentLine)
-		if e.state.cursorCol < len(runes) {
-			before := string(runes[:e.state.cursorCol])
-			after := string(runes[e.state.cursorCol+1:])
-			e.state.lines[e.state.cursorLine] = before + after
+		afterCursor := currentLine[e.state.cursorCol:]
+		_, size := utf8.DecodeRuneInString(afterCursor)
+		if size <= 0 {
+			size = 1
 		}
+		before := currentLine[:e.state.cursorCol]
+		after := currentLine[e.state.cursorCol+size:]
+		e.state.lines[e.state.cursorLine] = before + after
 	} else if e.state.cursorLine < len(e.state.lines)-1 {
 		e.pushUndoSnapshot()
 
@@ -1211,19 +1217,19 @@ func (e *Editor) moveWordBackwards() {
 	pos := len(runes) - 1
 
 	// Skip trailing whitespace
-	for pos >= 0 && unicode.IsSpace(runes[pos]) {
+	for pos >= 0 && isWhitespaceChar(runes[pos]) {
 		pos--
 	}
 
 	if pos >= 0 {
-		if unicode.IsPunct(runes[pos]) {
+		if isPunctuationChar(runes[pos]) {
 			// Skip punctuation run
-			for pos >= 0 && unicode.IsPunct(runes[pos]) {
+			for pos >= 0 && isPunctuationChar(runes[pos]) {
 				pos--
 			}
 		} else {
 			// Skip word run
-			for pos >= 0 && !unicode.IsSpace(runes[pos]) && !unicode.IsPunct(runes[pos]) {
+			for pos >= 0 && !isWhitespaceChar(runes[pos]) && !isPunctuationChar(runes[pos]) {
 				pos--
 			}
 		}
@@ -1254,19 +1260,19 @@ func (e *Editor) moveWordForwards() {
 	pos := 0
 
 	// Skip leading whitespace
-	for pos < len(runes) && unicode.IsSpace(runes[pos]) {
+	for pos < len(runes) && isWhitespaceChar(runes[pos]) {
 		pos++
 	}
 
 	if pos < len(runes) {
-		if unicode.IsPunct(runes[pos]) {
+		if isPunctuationChar(runes[pos]) {
 			// Skip punctuation run
-			for pos < len(runes) && unicode.IsPunct(runes[pos]) {
+			for pos < len(runes) && isPunctuationChar(runes[pos]) {
 				pos++
 			}
 		} else {
 			// Skip word run
-			for pos < len(runes) && !unicode.IsSpace(runes[pos]) && !unicode.IsPunct(runes[pos]) {
+			for pos < len(runes) && !isWhitespaceChar(runes[pos]) && !isPunctuationChar(runes[pos]) {
 				pos++
 			}
 		}
@@ -1454,12 +1460,76 @@ func (e *Editor) isEditorEmpty() bool {
 
 // isOnFirstVisualLine checks if cursor is on the first visual line
 func (e *Editor) isOnFirstVisualLine() bool {
-	return e.state.cursorLine == 0
+	return e.currentVisualLineIndex() == 0
 }
 
 // isOnLastVisualLine checks if cursor is on the last visual line
 func (e *Editor) isOnLastVisualLine() bool {
-	return e.state.cursorLine >= len(e.state.lines)-1
+	current := e.currentVisualLineIndex()
+	total := e.totalVisualLineCount()
+	return current >= max(0, total-1)
+}
+
+func (e *Editor) effectiveLayoutWidth() int {
+	if e.layoutWidth > 0 {
+		return e.layoutWidth
+	}
+	return 1
+}
+
+func (e *Editor) totalVisualLineCount() int {
+	if len(e.state.lines) == 0 {
+		return 1
+	}
+	width := e.effectiveLayoutWidth()
+	total := 0
+	for _, line := range e.state.lines {
+		if line == "" {
+			total++
+			continue
+		}
+		if fasttui.VisibleWidth(line) <= width {
+			total++
+			continue
+		}
+		total += len(wrapLine(line, width, 0, false))
+	}
+	return max(1, total)
+}
+
+func (e *Editor) currentVisualLineIndex() int {
+	if len(e.state.lines) == 0 {
+		return 0
+	}
+
+	width := e.effectiveLayoutWidth()
+	index := 0
+
+	// Count visual lines before the current logical line.
+	for i := 0; i < e.state.cursorLine && i < len(e.state.lines); i++ {
+		line := e.state.lines[i]
+		if line == "" || fasttui.VisibleWidth(line) <= width {
+			index++
+		} else {
+			index += len(wrapLine(line, width, 0, false))
+		}
+	}
+
+	// Add visual offset inside current logical line.
+	if e.state.cursorLine >= 0 && e.state.cursorLine < len(e.state.lines) {
+		line := e.state.lines[e.state.cursorLine]
+		if line != "" && fasttui.VisibleWidth(line) > width {
+			chunks := wrapLine(line, width, e.state.cursorCol, true)
+			for i, chunk := range chunks {
+				if chunk.HasCursor {
+					index += i
+					break
+				}
+			}
+		}
+	}
+
+	return max(0, index)
 }
 
 // navigateHistory navigates through command history
@@ -1602,6 +1672,21 @@ func isWordChar(s string) bool {
 		return true
 	}
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+func isWhitespaceChar(r rune) bool {
+	return unicode.IsSpace(r)
+}
+
+func isPunctuationChar(r rune) bool {
+	switch r {
+	case '(', ')', '{', '}', '[', ']', '<', '>', '.', ',', ';', ':', '\'', '"',
+		'!', '?', '+', '-', '=', '*', '/', '\\', '|', '&', '%', '^', '$', '#',
+		'@', '~', '`':
+		return true
+	default:
+		return false
+	}
 }
 
 // tryTriggerAutocomplete fetches suggestions and shows autocomplete list.
