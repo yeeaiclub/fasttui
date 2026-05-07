@@ -47,6 +47,12 @@ type TUI struct {
 
 	clearOnShrink bool
 
+	// Desync detection: tracks potential coordinate desync between TUI's internal
+	// model and the terminal's actual cursor position. When consecutive desyncs
+	// exceed threshold, a full render is triggered to reset all coordinates.
+	consecutiveDesyncs int
+	desyncThreshold    int
+
 	eventLoopDone chan struct{}
 }
 
@@ -60,6 +66,7 @@ func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 		terminal:           terminal,
 		showHardwareCursor: showHardwareCursor,
 		previousLines:      nil,
+		desyncThreshold:    3,
 	}
 	t.eventLoopDone = make(chan struct{})
 	close(t.eventLoopDone)
@@ -95,6 +102,19 @@ func (t *TUI) ForceRender() {
 	case <-t.stopChan:
 	default:
 	}
+}
+
+// SignalExternalOutput notifies the TUI that external output (from child processes,
+// git, build tools, etc.) may have written to the terminal. This increments the
+// desync counter, and after enough signals, a full render will be triggered to
+// reset all internal coordinates and recover from any misalignment.
+//
+// This is a defense-in-depth mechanism alongside the alternate screen buffer.
+// Call this when you know external output has occurred (e.g., after spawning
+// a subprocess that writes to stdout/stderr).
+func (t *TUI) SignalExternalOutput() {
+	t.consecutiveDesyncs++
+	t.TriggerRender()
 }
 
 func (t *TUI) eventLoop() {
@@ -152,6 +172,12 @@ func (t *TUI) forceRender() {
 
 func (t *TUI) doRender() {
 	if t.stopped {
+		return
+	}
+
+	if t.consecutiveDesyncs >= t.desyncThreshold && t.desyncThreshold > 0 {
+		t.forceRender()
+		t.consecutiveDesyncs = 0
 		return
 	}
 
@@ -254,6 +280,8 @@ func (t *TUI) doRender() {
 	t.moveHardwareCursorTo(row, col, renderLinesLength)
 	t.previousLines = newLines
 	t.previousWidth = width
+
+	t.consecutiveDesyncs = 0
 }
 
 func (t *TUI) renderChangedLines(width, height, firstChangedIdx, lastChangedIdx int, newLines []string, appendStart bool) int {
@@ -469,6 +497,7 @@ func (t *TUI) start() error {
 			t.HandleInput(data)
 		},
 		func() {
+			t.consecutiveDesyncs++
 			t.TriggerRender()
 		},
 	)
