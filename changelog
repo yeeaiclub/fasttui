@@ -1,6 +1,33 @@
 # Changelog
 
-## [unreleased]
+## [v0.7.0]
+
+### Fixed
+
+- **ANSI CSI sequence terminator: full ECMA-48 compliance**
+  - **Symptom:** Certain ANSI escape sequences (e.g. `ESC[A`/`ESC[B`/`ESC[C`/`ESC[D` for cursor movement, `ESC[s`/`ESC[u` for save/restore position, `ESC[?25l`/`ESC[?25h` for cursor hide/show) were not recognized as valid terminators by the parser. The raw escape bytes leaked into rendered output as mojibake/garbage text.
+  - **Root cause:** The `isTerminator()` function in `ansi.go` only accepted 5 specific bytes (`A`, `B`, `C`, `D`, `m`) as CSI sequence final characters, while ECMA-48 §5.4 defines the complete range as all printable characters in **0x40–0x7E** (64 possible terminators covering cursor movement, mode set/reset, character set selection, etc.). Sequences using any terminator outside that 5-byte whitelist were left unterminated in the parser's internal state machine, causing their raw byte content to be emitted as visible garbage on screen.
+  - **Fix:** Changed `isTerminator(b)` to accept any byte where `b >= 0x40 && b <= 0x7E`, matching the full ECMA-48 Final Byte specification. All standard CSI sequences — including cursor positioning (`H`/`f`), scrolling (`S`/`T`), erase (`J`/`K`), mode control (`h`/`l`), device attributes (`c`), etc. — are now correctly identified and stripped during rendering.
+  - **Tests:** Updated `TestStripAnsi/incomplete_csi` expectations to align with correct parsing behavior.
+
+- **TUI coordinate desync: alternate screen buffer + automatic recovery**
+  - **Symptom:** When external processes (child commands like `git status`, `ls -la`, build tools) wrote to the terminal while the TUI was running, their output could corrupt the incremental rendering state. Symptoms included duplicated input boxes, misaligned component positions, overlapping lines, and persistent visual artifacts that only resolved after a manual full re-render or resize event.
+  - **Root cause:** The TUI uses an **incremental rendering** strategy (`renderChangedLines`) that tracks internal cursor coordinates (`hardwareCursorRow`) and assumes they stay synchronized with the actual terminal cursor position. External process output writes directly to the terminal via `os.Stdout`/`os.Stderr`, advancing the real terminal cursor without the TUI's knowledge. Subsequent incremental renders then issued relative cursor-movement sequences (`ESC[nA`/`ESC[nB`/`ESC[nG`) based on stale coordinates, causing all following output to be placed at wrong screen locations.
+  - **Fix — Layer 1 (primary): Alternate screen buffer isolation**
+    - Added `ESC[?1049h` / `ESC[?1049l` to Terminal's `Start()` / `Stop()` methods. This switches the terminal into an **alternate screen buffer** at startup and restores the main buffer at exit. While the TUI runs in the alternate buffer, any external output goes to the main buffer (which is hidden). On exit, `ESC[?1049l` atomically restores the main buffer with its original content intact. This is a terminal-standard feature supported by all modern terminals (xterm, iTerm2, Kitty, Windows Terminal, tmux, etc.) and eliminates the problem at its source.
+    - **Important ordering:** `ESC[?1049l` is sent **first** in `Stop()`, before cursor restoration, mouse disable, and other cleanup, so the user sees their original terminal state immediately.
+  - **Fix — Layer 2 (defense-in-depth): Desync detection & auto-recovery**
+    - Added two fields to the TUI struct: `consecutiveDesyncs int` (running count of suspected desync events) and `desyncThreshold int` (default `3`). When `consecutiveDesyncs >= desyncThreshold`, the next render call triggers `forceRender()` which resets all internal coordinates (`previousLines = nil`, `hardwareCursorRow = 0`, etc.) and performs a clean full re-render, recovering from any accumulated coordinate drift.
+    - Desync counter increments on: (a) terminal resize events (which can shift viewport boundaries), (b) explicit calls to the new public API `SignalExternalOutput()`. Counter resets to zero after every successful normal (incremental) render.
+    - Added public method `SignalExternalOutput()` for callers to notify the TUI when external output has occurred (e.g., after spawning a subprocess that may write to stdout/stderr).
+  - **Guidance for application code:** Child processes should capture output to buffers (`cmd.Stdout = &buf`) rather than piping to `os.Stdout`, then inject captured text into the TUI via normal component rendering paths (e.g., `addBotMessage()`). This keeps all output within the TUI's controlled rendering pipeline.
+
+- **Editor: reverse-video cursor leaked when component lost focus**
+  - **Symptom:** When the Editor component lost keyboard focus (e.g., user triggered slash-command autocomplete which opened a SelectList overlay), a white reverse-video block (the Editor's visible cursor indicator `\x1b[7m...\x1b[27m`) remained visible on screen next to the focused component (e.g., the right side of the Select list).
+  - **Root cause:** In `Editor.renderLineWithCursor()`, the invisible hardware-cursor marker (`CURSOR_MARKER`) was correctly gated behind `e.focused && !e.IsShowingAutocomplete()`, but the **visible reverse-video cursor decoration** (`\x1b[7m` + char + `\x1b[27m`) was unconditionally appended to the rendered line regardless of focus state. When the Editor lost focus, no marker meant the hardware cursor was hidden (correct), but the reverse-video block still appeared in the rendered output (incorrect).
+  - **Fix:** Extracted focus check into a single boolean `showVisibleCursor := e.focused && !e.IsShowingAutocomplete()` and applied it as a guard to both the `CURSOR_MARKER` insertion AND the reverse-video cursor rendering. Now both cursor representations are shown/hidden together consistently.
+
+## [v0.6.0]
 
 ### Fixed
 

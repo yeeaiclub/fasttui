@@ -448,11 +448,12 @@ func (e *Editor) renderLineWithCursor(line LayoutLine, contentWidth, paddingX in
 	after := displayText[cursorPos:]
 
 	marker := ""
-	if e.focused && !e.IsShowingAutocomplete() {
+	showVisibleCursor := e.focused && !e.IsShowingAutocomplete()
+	if showVisibleCursor {
 		marker = CURSOR_MARKER
 	}
 
-	if len(after) > 0 {
+	if showVisibleCursor && len(after) > 0 {
 		afterRunes := []rune(after)
 		var firstGrapheme string
 		var restAfter string
@@ -460,10 +461,10 @@ func (e *Editor) renderLineWithCursor(line LayoutLine, contentWidth, paddingX in
 			firstGrapheme = string(afterRunes[0])
 			restAfter = string(afterRunes[1:])
 		}
-		cursor := "\x1b[7m" + firstGrapheme + "\x1b[0m"
+		cursor := "\x1b[7m" + firstGrapheme + "\x1b[27m"
 		displayText = before + marker + cursor + restAfter
-	} else {
-		cursor := "\x1b[7m \x1b[0m"
+	} else if showVisibleCursor {
+		cursor := "\x1b[7m \x1b[27m"
 		displayText = before + marker + cursor
 		lineVisibleWidth = lineVisibleWidth + 1
 		if lineVisibleWidth > contentWidth && paddingX > 0 {
