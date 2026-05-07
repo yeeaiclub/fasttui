@@ -65,6 +65,12 @@ func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) erro
 	// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 	p.print("\x1b[?2004h")
 
+	// Alternate screen: keeps scrollback intact and gives a clean grid for incremental draws.
+	// Clear + home so hardware row 0 matches the TUI's first full paint (previousLines == nil).
+	// Note: processes that inherit stdout can still interleave on this buffer; redirect their
+	// stdout/stderr if you spawn them while the TUI is running.
+	p.print("\x1b[?1049h\x1b[2J\x1b[H")
+
 	// Query and enable Kitty keyboard protocol
 	p.queryAndEnableKittyProtocol()
 
@@ -214,7 +220,7 @@ func (p *ProcessTerminal) Stop() {
 		// Signal goroutines to stop
 		close(p.stopChan)
 
-		// Disable bracketed paste mode
+		// Disable bracketed paste mode (while still on the alternate screen)
 		p.print("\x1b[?2004l")
 
 		// Disable Kitty keyboard protocol (pop the flags we pushed) - only if we enabled it
@@ -223,14 +229,17 @@ func (p *ProcessTerminal) Stop() {
 			p.isKittyProtocolActive = false
 		}
 
-		// Show cursor (ensure it's visible after exit)
-		p.print("\x1b[?25h")
-
-		// Reset SGR (colors, etc)
+		// Reset SGR before leaving alternate screen
 		p.print("\x1b[0m")
 
-		// Move cursor down 4 lines to avoid overwriting last rendered content
-		p.print("\r\n\r\n\r\n\r\n")
+		// Leave alternate screen (restores primary buffer from before Start)
+		p.print("\x1b[?1049l")
+
+		// Show cursor for the shell on the primary screen
+		p.print("\x1b[?25h")
+
+		// One fresh line after restore (no need for multiple blank lines on primary)
+		p.print("\r\n")
 
 		// Clean up StdinBuffer
 		if p.buffer != nil {
