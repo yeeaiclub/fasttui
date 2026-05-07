@@ -92,6 +92,10 @@ func (app *ChatApp) simulateResponse(loader *components.Loader) {
 	loader.Stop()
 
 	responses := []string{
+		"WRAP_EN " + strings.Repeat("The_quick_brown_fox_jumps_over_the_lazy_dog_0123456789_", 14),
+		"WRAP_ZH " + strings.Repeat("这是一段连续中文用于测试换行切割与终端列宽", 12) + " 结束",
+		"WRAP_MIX " + strings.Repeat("混合Mixed中文English数字123标点。", 10),
+		"**" + strings.Repeat("加粗中文折行测试一二三四五六七八九十。", 8) + "**",
 		"## That's interesting! Tell me more.",
 		"**I see what you mean.**",
 		"#### Fascinating perspective!",

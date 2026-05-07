@@ -2,6 +2,15 @@
 
 ## [unreleased]
 
+### Fixed
+
+- **WrapAnsiText: UTF-8 safe tokenization and correct wide-character wrap widths**
+  - **Symptom:** Long lines mixing Chinese, Latin digits, and punctuation (for example `WRAP_MIX` test strings in the chat example) could show mojibake on the terminal (bytes mis-decoded as Latin-1 style garbage) or appear “compressed” / mis-wrapped next to the path column.
+  - **Root cause 1 — `splitIntoTokensWithAnsi`:** The tokenizer advanced **one byte at a time** (`string(text[i])`) for non-ANSI text. UTF-8 multi-byte sequences (e.g. CJK) were split into invalid 1-byte fragments. Those fragments are not valid UTF-8 code points; downstream wrapping and padding could still concatenate bytes in order, but token boundaries and width accounting no longer matched real characters, which led to confusing output and incorrect break behavior at the terminal.
+  - **Root cause 2 — `breakLongWord`:** Hard-coded display width **1 per rune** while `VisibleWidth` / `GraphemeWidth` treat East Asian characters as width **2**. Wrapped lines could still exceed the target column count in **display** width. Markdown’s `applyPaddingAndBackground` then called `SliceByColumn(..., strict: true)` when `VisibleWidth(lineWithMargins) > width`, amplifying the mismatch and making corruption more visible.
+  - **Fix:** Decode non-ANSI text with **`utf8.DecodeRuneInString`** and advance `i` by the full UTF-8 code point length (invalid bytes fall back to advancing one byte to avoid desyncing the buffer). In **`breakLongWord`**, segment text with **`graphemes.FromString`** (same family as width measurement) and assign each segment’s column cost with **`GraphemeWidth(grapheme)`** instead of a constant 1.
+  - **Tests:** Added `text_wrap_test.go` with `TestWrapAnsiText_CJKRespectsWidthAndValidUTF8` (mixed CJK/Latin repeat string, asserts every wrapped line `VisibleWidth <= col` and `utf8.ValidString`) and `TestSplitIntoTokensWithAnsi_PreservesUTF8` (e.g. `a中b` stays a single valid token).
+
 ### Removed
 
 - **Remove overlay functionality and related tests**
