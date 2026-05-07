@@ -1,6 +1,11 @@
 package fasttui
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+
+	"github.com/clipperhouse/uax29/v2/graphemes"
+)
 
 func splitIntoTokensWithAnsi(text string) []string {
 	var tokens []string
@@ -17,8 +22,13 @@ func splitIntoTokensWithAnsi(text string) []string {
 			continue
 		}
 
-		char := string(text[i])
-		charIsSpace := char == " "
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if r == utf8.RuneError && size == 1 {
+			// Invalid UTF-8 byte: preserve as single byte so we do not desync the buffer.
+			size = 1
+		}
+		char := text[i : i+size]
+		charIsSpace := r == ' '
 
 		if charIsSpace != inWhitespace && current != "" {
 			tokens = append(tokens, current)
@@ -32,7 +42,7 @@ func splitIntoTokensWithAnsi(text string) []string {
 
 		inWhitespace = charIsSpace
 		current += char
-		i++
+		i += size
 	}
 
 	if pendingAnsi != "" {
@@ -172,8 +182,9 @@ func breakLongWord(word string, width int, tracker *AnsiCodeTracker) []string {
 				end++
 			}
 			textPortion := word[i:end]
-			for _, c := range textPortion {
-				segments = append(segments, textSegment{segType: segmentTypeGrapheme, value: string(c)})
+			g := graphemes.FromString(textPortion)
+			for g.Next() {
+				segments = append(segments, textSegment{segType: segmentTypeGrapheme, value: g.Value()})
 			}
 			i = end
 		}
@@ -191,7 +202,7 @@ func breakLongWord(word string, width int, tracker *AnsiCodeTracker) []string {
 			continue
 		}
 
-		graphemeW := 1
+		graphemeW := GraphemeWidth(grapheme)
 
 		if currentWidth+graphemeW > width {
 			lineEndReset := tracker.GetLineEndReset()

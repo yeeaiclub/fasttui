@@ -1,6 +1,7 @@
 package components
 
 import (
+	"sync"
 	"time"
 
 	"github.com/yeeaiclub/fasttui"
@@ -8,18 +9,24 @@ import (
 
 var _ fasttui.Component = (*Loader)(nil)
 
-// Loader component that updates every 80ms with spinning animation
+// Loader component that updates every 80ms with spinning animation.
+// A single background goroutine owns frame/message updates and talks to the TUI via channels;
+// only Text cross-thread access uses textMu (Render vs worker).
 type Loader struct {
 	*Text
+	textMu sync.RWMutex
+	life   sync.Mutex
+
+	running bool
+	stopCh  chan struct{}
+	msgCh   chan string
+	doneCh  chan struct{}
+
 	frames         []string
-	currentFrame   int
-	ticker         *time.Ticker
-	stopChan       chan struct{}
 	ui             *fasttui.TUI
 	spinnerColorFn func(string) string
 	messageColorFn func(string) string
 	message        string
-	running        bool
 }
 
 // LoaderOption configures optional theming and behavior of Loader.
@@ -49,12 +56,10 @@ func NewLoader(
 	}
 
 	loader := &Loader{
-		Text:           NewText("", 1, 0),
-		frames:         []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
-		currentFrame:   0,
-		ui:             ui,
-		message:        message,
-		stopChan:       make(chan struct{}),
+		Text:    NewText("", 1, 0),
+		frames:  []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
+		ui:      ui,
+		message: message,
 	}
 
 	for _, opt := range opts {
@@ -68,6 +73,8 @@ func NewLoader(
 }
 
 func (l *Loader) Render(width int) []string {
+	l.textMu.RLock()
+	defer l.textMu.RUnlock()
 	lines := l.Text.Render(width)
 	result := make([]string, 0, len(lines)+1)
 	result = append(result, "")
@@ -76,69 +83,95 @@ func (l *Loader) Render(width int) []string {
 }
 
 func (l *Loader) Start() {
+	l.life.Lock()
+	defer l.life.Unlock()
 	if l.running {
 		return
 	}
-
 	l.running = true
-	l.updateDisplay()
+	l.stopCh = make(chan struct{})
+	l.msgCh = make(chan string, 8)
+	l.doneCh = make(chan struct{})
+	go l.loop()
+}
 
-	l.ticker = time.NewTicker(80 * time.Millisecond)
-	ticker := l.ticker
-	stopChan := l.stopChan
-
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				if !l.running {
-					return
-				}
-				l.currentFrame = (l.currentFrame + 1) % len(l.frames)
-				l.updateDisplay()
-			case <-stopChan:
-				return
-			}
-		}
+func (l *Loader) loop() {
+	stop := l.stopCh
+	msgCh := l.msgCh
+	done := l.doneCh
+	ticker := time.NewTicker(80 * time.Millisecond)
+	defer func() {
+		ticker.Stop()
+		close(done)
 	}()
+
+	msg := l.message
+	l.paint(0, msg)
+	frame := 0
+
+	for {
+		select {
+		case <-stop:
+			return
+		case m := <-msgCh:
+			msg = m
+			l.paint(frame, msg)
+		case <-ticker.C:
+			frame = (frame + 1) % len(l.frames)
+			l.paint(frame, msg)
+		}
+	}
 }
 
-func (l *Loader) Stop() {
-	if !l.running {
-		return
-	}
-
-	l.running = false
-	if l.ticker != nil {
-		l.ticker.Stop()
-		l.ticker = nil
-	}
-	close(l.stopChan)
-	l.stopChan = make(chan struct{})
-}
-
-func (l *Loader) SetMessage(message string) {
-	l.message = message
-	l.updateDisplay()
-}
-
-func (l *Loader) updateDisplay() {
-	frame := l.frames[l.currentFrame]
-	var text string
-
-	if l.spinnerColorFn != nil && l.messageColorFn != nil {
-		text = l.spinnerColorFn(frame) + " " + l.messageColorFn(l.message)
-	} else if l.spinnerColorFn != nil {
-		text = l.spinnerColorFn(frame) + " " + l.message
-	} else if l.messageColorFn != nil {
-		text = frame + " " + l.messageColorFn(l.message)
-	} else {
-		text = frame + " " + l.message
-	}
-
-	l.Text.SetText(text)
+func (l *Loader) paint(frame int, msg string) {
+	line := l.buildSpinnerLine(frame, msg)
+	l.textMu.Lock()
+	l.Text.SetText(line)
+	l.textMu.Unlock()
 
 	if l.ui != nil {
 		l.ui.TriggerRender()
 	}
+}
+
+func (l *Loader) Stop() {
+	l.life.Lock()
+	if !l.running {
+		l.life.Unlock()
+		return
+	}
+	close(l.stopCh)
+	done := l.doneCh
+	l.running = false
+	l.stopCh = nil
+	l.msgCh = nil
+	l.doneCh = nil
+	l.life.Unlock()
+
+	<-done
+}
+
+func (l *Loader) SetMessage(message string) {
+	l.life.Lock()
+	ch := l.msgCh
+	running := l.running
+	l.life.Unlock()
+	if !running || ch == nil {
+		return
+	}
+	ch <- message
+}
+
+func (l *Loader) buildSpinnerLine(frame int, message string) string {
+	f := l.frames[frame]
+	if l.spinnerColorFn != nil && l.messageColorFn != nil {
+		return l.spinnerColorFn(f) + " " + l.messageColorFn(message)
+	}
+	if l.spinnerColorFn != nil {
+		return l.spinnerColorFn(f) + " " + message
+	}
+	if l.messageColorFn != nil {
+		return f + " " + l.messageColorFn(message)
+	}
+	return f + " " + message
 }

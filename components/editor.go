@@ -49,14 +49,24 @@ type Editor struct {
 	borderColor func(string) string
 }
 
+// EditorOption configures optional behavior and theming of Editor.
+type EditorOption func(*Editor)
+
+// WithEditorBorderColor sets the color function used to render the editor border.
+func WithEditorBorderColor(color func(string) string) EditorOption {
+	return func(e *Editor) {
+		e.borderColor = color
+	}
+}
+
 type EditorState struct {
 	lines      []string
 	cursorLine int
 	cursorCol  int
 }
 
-func NewEditor(term fasttui.Terminal, submit func(text string)) *Editor {
-	return &Editor{
+func NewEditor(term fasttui.Terminal, submit func(text string), opts ...EditorOption) *Editor {
+	e := &Editor{
 		undoStack:    make([]EditorState, 0),
 		state:        EditorState{lines: []string{""}},
 		historyIndex: -1,
@@ -69,6 +79,13 @@ func NewEditor(term fasttui.Terminal, submit func(text string)) *Editor {
 		},
 		autocompleteMaxVisible: 5,
 	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(e)
+		}
+	}
+	return e
 }
 
 // SetAutocomplete configures autocomplete provider and select list theme.
