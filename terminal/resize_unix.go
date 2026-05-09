@@ -3,14 +3,13 @@
 package terminal
 
 import (
-	"os"
 	"os/signal"
 	"syscall"
 )
 
-func registerResizeSignal(ch chan os.Signal) func() {
-	signal.Notify(ch, syscall.SIGWINCH)
+func registerResizeSignal(p *ProcessTerminal) func() {
+	signal.Notify(p.resizeSignalChan, syscall.SIGWINCH)
 	return func() {
-		signal.Stop(ch)
+		signal.Stop(p.resizeSignalChan)
 	}
 }

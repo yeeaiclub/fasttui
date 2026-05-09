@@ -69,7 +69,7 @@ func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) erro
 	p.queryAndEnableKittyProtocol()
 
 	// Set up resize signal handling
-	p.stopResizeSignal = registerResizeSignal(p.resizeSignalChan)
+	p.stopResizeSignal = registerResizeSignal(p)
 	go p.handleResizeSignal()
 
 	// Start reading input in background
