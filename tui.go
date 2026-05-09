@@ -31,6 +31,7 @@ type TUI struct {
 
 	previousLines       []string // previous rendered line contents
 	previousWidth       int      // previous terminal width
+	previousHeight      int      // previous terminal height (rows)
 	previousViewportTop int      // previous viewport top row number
 	maxLinesRendered    int      // max lines ever rendered (for clearing screen)
 
@@ -141,6 +142,7 @@ func (t *TUI) eventLoop() {
 func (t *TUI) forceRender() {
 	t.previousLines = nil
 	t.previousWidth = -1
+	t.previousHeight = -1
 	t.cursorRow = 0
 	t.hardwareCursorRow = 0
 	t.maxLinesRendered = 0
@@ -171,13 +173,17 @@ func (t *TUI) doRender() {
 	newLines = appendSegmentResetCodes(newLines)
 	fullRender := t.getFullRender(newLines, height, row, col, width)
 
-	widthChanged := t.previousWidth != 0 && t.previousWidth != width
-	if t.previousLines == nil && !widthChanged {
+	// Any terminal dimension change invalidates incremental drawing: cursor row and
+	// viewport math assume the previous size. Window drags often change height only
+	// (especially on Windows, where resize signals may not run between frames).
+	terminalSizeChanged := (t.previousWidth != 0 && t.previousWidth != width) ||
+		(t.previousHeight != 0 && t.previousHeight != height)
+	if t.previousLines == nil && !terminalSizeChanged {
 		fullRender.Render(false)
 		return
 	}
 
-	if widthChanged {
+	if terminalSizeChanged {
 		fullRender.Render(true)
 		return
 	}
@@ -217,6 +223,7 @@ func (t *TUI) doRender() {
 		t.moveHardwareCursorTo(row, col, renderLinesLength)
 		t.previousLines = newLines
 		t.previousWidth = width
+		t.previousHeight = height
 		t.previousViewportTop = max(0, t.maxLinesRendered-height)
 		return
 	}
@@ -252,6 +259,7 @@ func (t *TUI) doRender() {
 	t.moveHardwareCursorTo(row, col, renderLinesLength)
 	t.previousLines = newLines
 	t.previousWidth = width
+	t.previousHeight = height
 }
 
 func (t *TUI) renderChangedLines(width, height, firstChangedIdx, lastChangedIdx int, newLines []string, appendStart bool) int {
@@ -447,6 +455,7 @@ func (f FullRenderer) Render(clear bool) {
 	f.tui.moveHardwareCursorTo(f.row, f.col, f.height)
 	f.tui.previousLines = f.newLines
 	f.tui.previousWidth = f.width
+	f.tui.previousHeight = f.height
 }
 
 func (t *TUI) getFullRender(newLines []string, height int, row int, col int, width int) FullRenderer {
