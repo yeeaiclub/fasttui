@@ -40,6 +40,12 @@ func TestLoader_NewLoader_defaultMessage(t *testing.T) {
 	require.Contains(t, body, "Loading...")
 }
 
+func TestLoader_nonPositiveTickInterval_usesDefault(t *testing.T) {
+	l := NewLoader(nil, "ok", WithLoaderTickInterval(0), WithLoaderTickInterval(-time.Millisecond))
+	defer l.Stop()
+	waitLoaderSubstring(t, l, "ok")
+}
+
 func TestLoader_Render_layoutAndMessage(t *testing.T) {
 	l := NewLoader(nil, "PING")
 	defer l.Stop()

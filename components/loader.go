@@ -9,6 +9,8 @@ import (
 
 var _ fasttui.Component = (*Loader)(nil)
 
+const loaderDefaultTickInterval = 150 * time.Millisecond
+
 // Loader component that updates with a configurable spinning animation.
 // A single background goroutine owns frame/message updates and talks to the TUI via channels;
 // only Text cross-thread access uses textMu (Render vs worker).
@@ -48,6 +50,7 @@ func WithLoaderMessageColor(fn func(string) string) LoaderOption {
 }
 
 // WithLoaderTickInterval sets the animation frame refresh interval.
+// Non-positive values are replaced with the default when Start runs.
 func WithLoaderTickInterval(d time.Duration) LoaderOption {
 	return func(l *Loader) {
 		l.tickInterval = d
@@ -67,7 +70,7 @@ func NewLoader(
 		Text:         NewText("", 1, 0),
 		frames:       []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
 		ui:           ui,
-		tickInterval: 150 * time.Millisecond,
+		tickInterval: loaderDefaultTickInterval,
 		message:      message,
 	}
 
@@ -96,6 +99,9 @@ func (l *Loader) Start() {
 	defer l.life.Unlock()
 	if l.running {
 		return
+	}
+	if l.tickInterval <= 0 {
+		l.tickInterval = loaderDefaultTickInterval
 	}
 	l.running = true
 	l.stopCh = make(chan struct{})
