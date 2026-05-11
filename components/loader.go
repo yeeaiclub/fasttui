@@ -9,7 +9,7 @@ import (
 
 var _ fasttui.Component = (*Loader)(nil)
 
-// Loader component that updates every 80ms with spinning animation.
+// Loader component that updates with a configurable spinning animation.
 // A single background goroutine owns frame/message updates and talks to the TUI via channels;
 // only Text cross-thread access uses textMu (Render vs worker).
 type Loader struct {
@@ -26,6 +26,7 @@ type Loader struct {
 	ui             *fasttui.TUI
 	spinnerColorFn func(string) string
 	messageColorFn func(string) string
+	tickInterval   time.Duration
 	message        string
 }
 
@@ -46,6 +47,13 @@ func WithLoaderMessageColor(fn func(string) string) LoaderOption {
 	}
 }
 
+// WithLoaderTickInterval sets the animation frame refresh interval.
+func WithLoaderTickInterval(d time.Duration) LoaderOption {
+	return func(l *Loader) {
+		l.tickInterval = d
+	}
+}
+
 func NewLoader(
 	ui *fasttui.TUI,
 	message string,
@@ -56,10 +64,11 @@ func NewLoader(
 	}
 
 	loader := &Loader{
-		Text:    NewText("", 1, 0),
-		frames:  []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
-		ui:      ui,
-		message: message,
+		Text:         NewText("", 1, 0),
+		frames:       []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
+		ui:           ui,
+		tickInterval: 150 * time.Millisecond,
+		message:      message,
 	}
 
 	for _, opt := range opts {
@@ -99,7 +108,7 @@ func (l *Loader) loop() {
 	stop := l.stopCh
 	msgCh := l.msgCh
 	done := l.doneCh
-	ticker := time.NewTicker(80 * time.Millisecond)
+	ticker := time.NewTicker(l.tickInterval)
 	defer func() {
 		ticker.Stop()
 		close(done)
