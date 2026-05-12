@@ -1,6 +1,10 @@
 package components
 
-import "github.com/yeeaiclub/fasttui"
+import (
+	"strings"
+
+	"github.com/yeeaiclub/fasttui"
+)
 
 var _ fasttui.Component = (*Spacer)(nil)
 
@@ -13,11 +17,11 @@ func NewSpacer(lines int) *Spacer {
 }
 
 func (s Spacer) Render(width int) []string {
-	line := make([]string, s.lines)
+	result := make([]string, s.lines)
 	for i := range s.lines {
-		line[i] = " "
+		result[i] = strings.Repeat(" ", width)
 	}
-	return line
+	return result
 }
 
 func (s Spacer) HandleInput(data string) {}
