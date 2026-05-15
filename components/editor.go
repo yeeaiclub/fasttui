@@ -523,7 +523,7 @@ func (e *Editor) SetFocused(focused bool) {
 }
 
 func (e *Editor) WantsKeyRelease() bool {
-	return true
+	return false
 }
 
 func (e *Editor) Invalidate() {}
