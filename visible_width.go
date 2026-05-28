@@ -28,16 +28,7 @@ func VisibleWidth(s string) int {
 		return 0
 	}
 
-	// Fast path: pure ASCII printable characters
-	isPureAscii := true
-	for i := 0; i < len(s); i++ {
-		code := s[i]
-		if code < 0x20 || code > 0x7e {
-			isPureAscii = false
-			break
-		}
-	}
-	if isPureAscii {
+	if isPrintableASCII(s) {
 		return len(s)
 	}
 

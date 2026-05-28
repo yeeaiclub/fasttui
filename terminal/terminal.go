@@ -174,41 +174,6 @@ func (p *ProcessTerminal) queryAndEnableKittyProtocol() {
 	p.print("\x1b[?u")
 }
 
-func (p *ProcessTerminal) DrainInput(maxMs int, idleMs int) error {
-	if p.isKittyProtocolActive {
-		p.print("\x1b[<u")
-		p.isKittyProtocolActive = false
-	}
-
-	previousHandler := p.inputHandler
-	p.inputHandler = nil
-
-	lastDataTime := time.Now()
-	endTime := time.Now().Add(time.Duration(maxMs) * time.Millisecond)
-	idleTimeout := time.Duration(idleMs) * time.Millisecond
-
-	buf := make([]byte, 1024)
-
-	for time.Now().Before(endTime) {
-		os.Stdin.SetReadDeadline(time.Now().Add(idleTimeout))
-		n, err := os.Stdin.Read(buf)
-		if err != nil {
-			break
-		}
-		if n > 0 {
-			lastDataTime = time.Now()
-		}
-
-		if time.Since(lastDataTime) > idleTimeout {
-			break
-		}
-	}
-
-	os.Stdin.SetReadDeadline(time.Time{})
-	p.inputHandler = previousHandler
-	return nil
-}
-
 func (p *ProcessTerminal) Stop() {
 	p.stopOnce.Do(func() {
 		// Signal goroutines to stop
