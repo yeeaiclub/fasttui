@@ -212,7 +212,7 @@ func (t *TUI) doRender() {
 		if len(t.previousLines) > renderLinesLength {
 			targetRow := max(0, renderLinesLength-1)
 			cursorOffset := computeLineDiff(targetRow)
-			extra := renderLinesLength - len(t.previousLines)
+			extra := len(t.previousLines) - renderLinesLength
 			if t.clearTrailingLines(cursorOffset, extra, height, fullRender) {
 				return
 			}
@@ -452,7 +452,9 @@ func (f FullRenderer) Render(clear bool) {
 		f.tui.maxLinesRendered = max(f.tui.maxLinesRendered, len(f.newLines))
 	}
 	f.tui.previousViewportTop = max(0, f.tui.maxLinesRendered-f.height)
-	f.tui.moveHardwareCursorTo(f.row, f.col, f.height)
+	// Use content line count (not terminal height) so cursor placement stays correct
+	// when rendered output exceeds the visible viewport (e.g. chat history + editor).
+	f.tui.moveHardwareCursorTo(f.row, f.col, len(f.newLines))
 	f.tui.previousLines = f.newLines
 	f.tui.previousWidth = f.width
 	f.tui.previousHeight = f.height
