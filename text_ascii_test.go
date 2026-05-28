@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -195,5 +196,138 @@ func BenchmarkVisibleWidth_nonascii(b *testing.B) {
 
 	for b.Loop() {
 		_ = VisibleWidth(s)
+	}
+}
+
+func BenchmarkStripAnsi_ascii(b *testing.B) {
+	s := strings.Repeat("hello world ", 1000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = StripAnsi(s)
+	}
+}
+
+func BenchmarkStripAnsi_withAnsi(b *testing.B) {
+	s := strings.Repeat("\x1b[31mhello\x1b[0m world ", 200)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = StripAnsi(s)
+	}
+}
+
+func BenchmarkSplitTokens_ascii(b *testing.B) {
+	s := strings.Repeat("hello world ", 1000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = splitIntoTokensWithAnsi(s)
+	}
+}
+
+func BenchmarkSplitTokens_withAnsi(b *testing.B) {
+	s := strings.Repeat("\x1b[31mhello\x1b[0m world ", 200)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = splitIntoTokensWithAnsi(s)
+	}
+}
+
+func BenchmarkWrapAnsiText_ascii(b *testing.B) {
+	s := strings.Repeat("hello world ", 20)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = WrapAnsiText(s, 80)
+	}
+}
+
+func BenchmarkWrapAnsiText_withAnsi(b *testing.B) {
+	s := strings.Repeat("\x1b[31mhello\x1b[0m world ", 20)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = WrapAnsiText(s, 80)
+	}
+}
+
+// ---- Before/After comparison (without isPrintableASCII fast path) ----
+
+func stripAnsiNoFastPath(s string) string {
+	if !strings.Contains(s, "\x1b") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		if s[i] == '\x1b' {
+			if _, n, ok := ExtractAnsiCode(s, i); ok {
+				i += n
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
+func splitTokensNoFastPath(text string) []string {
+	var tokens []string
+	var current string
+	var pendingAnsi string
+	inWhitespace := false
+	i := 0
+
+	for i < len(text) {
+		code, length, ok := ExtractAnsiCode(text, i)
+		if ok {
+			pendingAnsi += code
+			i += length
+			continue
+		}
+
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if r == utf8.RuneError && size == 1 {
+			size = 1
+		}
+		char := text[i : i+size]
+		charIsSpace := r == ' '
+
+		if charIsSpace != inWhitespace && current != "" {
+			tokens = append(tokens, current)
+			current = ""
+		}
+
+		if pendingAnsi != "" {
+			current += pendingAnsi
+			pendingAnsi = ""
+		}
+
+		inWhitespace = charIsSpace
+		current += char
+		i += size
+	}
+
+	if pendingAnsi != "" {
+		current += pendingAnsi
+	}
+
+	if current != "" {
+		tokens = append(tokens, current)
+	}
+
+	return tokens
+}
+
+func BenchmarkStripAnsi_before_ascii(b *testing.B) {
+	s := strings.Repeat("hello world ", 1000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = stripAnsiNoFastPath(s)
+	}
+}
+
+func BenchmarkSplitTokens_before_ascii(b *testing.B) {
+	s := strings.Repeat("hello world ", 1000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = splitTokensNoFastPath(s)
 	}
 }

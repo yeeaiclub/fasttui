@@ -8,6 +8,10 @@ import (
 )
 
 func splitIntoTokensWithAnsi(text string) []string {
+	if isPrintableASCII(text) {
+		return splitPureASCII(text)
+	}
+
 	var tokens []string
 	var current string
 	var pendingAnsi string
@@ -24,7 +28,6 @@ func splitIntoTokensWithAnsi(text string) []string {
 
 		r, size := utf8.DecodeRuneInString(text[i:])
 		if r == utf8.RuneError && size == 1 {
-			// Invalid UTF-8 byte: preserve as single byte so we do not desync the buffer.
 			size = 1
 		}
 		char := text[i : i+size]
@@ -53,6 +56,30 @@ func splitIntoTokensWithAnsi(text string) []string {
 		tokens = append(tokens, current)
 	}
 
+	return tokens
+}
+
+func splitPureASCII(s string) []string {
+	var tokens []string
+	start := 0
+	inSpace := s[0] == ' '
+
+	for i := 0; i < len(s); i++ {
+		isSpace := s[i] == ' '
+		if isSpace != inSpace {
+			tokens = append(tokens, s[start:i])
+			start = i
+			inSpace = isSpace
+		}
+	}
+
+	if start < len(s) {
+		tokens = append(tokens, s[start:])
+	}
+
+	if len(tokens) == 0 {
+		return []string{s}
+	}
 	return tokens
 }
 
