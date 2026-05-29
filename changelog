@@ -1,3 +1,34 @@
+## [Unreleased]
+
+### Performance
+
+- **Optimized memory allocations across components**
+  - Pre-allocate slice capacities in Box, Container, SelectList, and Markdown to reduce GC pressure during rendering
+  - Use `fasttui.AcquireBuilder`/`ReleaseBuilder` for pooled `strings.Builder` in Markdown's `replaceInlineStyle`
+  - Reduce allocations in Container's `GetChildren` and snapshot methods
+
+### Changed
+
+- **Container: improved concurrency safety**
+  - `Invalidate()` and `Render()` now use a snapshot of children to avoid calling external methods while holding the lock
+  - `GetChildren()` returns a copy of the children slice to prevent external mutations
+  - Use `slices.Delete` and `slices.Insert` for safer slice modifications
+
+- **Editor: grapheme-cluster-aware word wrapping**
+  - Implemented Unicode-aware word wrapping using `uax29` grapheme segmentation
+  - Handles CJK text, emoji, and combining marks correctly
+  - Added fast paths for printable ASCII and ASCII-only text
+  - Tab characters are now wrapped by display width (tab width = 3)
+
+- **Exported utility functions for external use**
+  - `fasttui.AcquireBuilder()` / `ReleaseBuilder()` for pooled string builders
+  - `fasttui.IsPrintableASCII()` for checking printable ASCII strings
+
+### Added
+
+- Benchmarks for `wrapLine` with printable ASCII and Unicode text
+- Tests for Unicode word wrap at whitespace boundaries and tab handling
+
 # Changelog
 
 ## [v0.6.0]
