@@ -8,6 +8,22 @@ import (
 
 type delimiterValidator func(text string, pos int) bool
 
+func indexByteSkippingANSI(s string, from int, b byte) int {
+	for i := from; i < len(s); {
+		if s[i] == '\x1b' {
+			if _, n, ok := fasttui.ExtractAnsiCode(s, i); ok {
+				i += n
+				continue
+			}
+		}
+		if s[i] == b {
+			return i
+		}
+		i++
+	}
+	return -1
+}
+
 var _ fasttui.Component = (*Markdown)(nil)
 
 // DefaultTextStyle defines the default styling for markdown content
@@ -468,18 +484,17 @@ func (m *Markdown) replaceLinks(text string) string {
 	remaining := text
 
 	for {
-		start := strings.Index(remaining, "[")
+		start := indexByteSkippingANSI(remaining, 0, '[')
 		if start == -1 {
 			result.WriteString(remaining)
 			break
 		}
 
-		textEnd := strings.Index(remaining[start:], "]")
+		textEnd := indexByteSkippingANSI(remaining, start, ']')
 		if textEnd == -1 {
 			result.WriteString(remaining)
 			break
 		}
-		textEnd += start
 
 		if textEnd+1 >= len(remaining) || remaining[textEnd+1] != '(' {
 			result.WriteString(remaining[:textEnd+1])
@@ -487,12 +502,11 @@ func (m *Markdown) replaceLinks(text string) string {
 			continue
 		}
 
-		urlEnd := strings.Index(remaining[textEnd+2:], ")")
+		urlEnd := indexByteSkippingANSI(remaining, textEnd+2, ')')
 		if urlEnd == -1 {
 			result.WriteString(remaining)
 			break
 		}
-		urlEnd += textEnd + 2
 
 		result.WriteString(remaining[:start])
 		linkText := remaining[start+1 : textEnd]
