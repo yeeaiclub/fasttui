@@ -94,3 +94,27 @@ func TestApplyPaddingAndBackground_NoExceedWidth(t *testing.T) {
 			"line %d must not exceed terminal width (prevents TUI panic)", i)
 	}
 }
+
+func TestRenderInline_PreservesSnakeCase(t *testing.T) {
+	m := NewMarkdown("", 0, 0, WithMarkdownTheme(&MarkdownTheme{
+		Italic: func(s string) string { return "<i>" + s + "</i>" },
+		Bold:   func(s string) string { return "<b>" + s + "</b>" },
+	}))
+
+	assert.Equal(t, "task_name", m.renderInline("task_name"))
+	assert.Equal(t, "foo_bar_baz", m.renderInline("foo_bar_baz"))
+	assert.Equal(t, "my_task_name_field", m.renderInline("my_task_name_field"))
+	assert.Equal(t, "a_b_c", m.renderInline("a_b_c"))
+}
+
+func TestRenderInline_UnderscoreEmphasis(t *testing.T) {
+	m := NewMarkdown("", 0, 0, WithMarkdownTheme(&MarkdownTheme{
+		Italic: func(s string) string { return "<i>" + s + "</i>" },
+		Bold:   func(s string) string { return "<b>" + s + "</b>" },
+	}))
+
+	assert.Equal(t, "<i>italic</i>", m.renderInline("_italic_"))
+	assert.Equal(t, "before <i>italic</i> after", m.renderInline("before _italic_ after"))
+	assert.Equal(t, "<i>foo_bar</i>", m.renderInline("_foo_bar_"))
+	assert.Equal(t, "<b>bold</b>", m.renderInline("__bold__"))
+}

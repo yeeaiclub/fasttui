@@ -6,6 +6,8 @@ import (
 	"github.com/yeeaiclub/fasttui"
 )
 
+type delimiterValidator func(text string, pos int) bool
+
 var _ fasttui.Component = (*Markdown)(nil)
 
 // DefaultTextStyle defines the default styling for markdown content
@@ -340,15 +342,15 @@ func (m *Markdown) renderInline(text string) string {
 	result := text
 
 	// Bold **text** or __text__
-	result = m.replaceInlineStyle(result, "**", m.theme.Bold)
-	result = m.replaceInlineStyle(result, "__", m.theme.Bold)
+	result = m.replaceInlineStyle(result, "**", m.theme.Bold, nil, nil)
+	result = m.replaceInlineStyle(result, "__", m.theme.Bold, canUnderscoreDelimiterOpen, canUnderscoreDelimiterClose("__"))
 
 	// Italic *text* or _text_
-	result = m.replaceInlineStyle(result, "*", m.theme.Italic)
-	result = m.replaceInlineStyle(result, "_", m.theme.Italic)
+	result = m.replaceInlineStyle(result, "*", m.theme.Italic, nil, nil)
+	result = m.replaceInlineStyle(result, "_", m.theme.Italic, canUnderscoreDelimiterOpen, canUnderscoreDelimiterClose("_"))
 
 	// Strikethrough ~~text~~
-	result = m.replaceInlineStyle(result, "~~", m.theme.Strikethrough)
+	result = m.replaceInlineStyle(result, "~~", m.theme.Strikethrough, nil, nil)
 
 	// Inline code `code`
 	result = m.replaceInlineCode(result)
@@ -360,32 +362,66 @@ func (m *Markdown) renderInline(text string) string {
 	return m.applyDefaultStyle(result)
 }
 
-func (m *Markdown) replaceInlineStyle(text string, marker string, styleFn func(string) string) string {
+func isASCIIAlphanumeric(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+// CommonMark: underscore delimiters inside identifiers (e.g. task_name) are literal.
+func canUnderscoreDelimiterOpen(text string, pos int) bool {
+	return pos == 0 || !isASCIIAlphanumeric(text[pos-1])
+}
+
+func canUnderscoreDelimiterClose(marker string) delimiterValidator {
+	markerLen := len(marker)
+	return func(text string, pos int) bool {
+		after := pos + markerLen
+		return after >= len(text) || !isASCIIAlphanumeric(text[after])
+	}
+}
+
+func findNextDelimiter(text, marker string, valid delimiterValidator) int {
+	searchFrom := 0
+	for {
+		idx := strings.Index(text[searchFrom:], marker)
+		if idx == -1 {
+			return -1
+		}
+		pos := searchFrom + idx
+		if valid == nil || valid(text, pos) {
+			return pos
+		}
+		searchFrom = pos + 1
+	}
+}
+
+func (m *Markdown) replaceInlineStyle(text string, marker string, styleFn func(string) string, canOpen, canClose delimiterValidator) string {
 	if styleFn == nil {
 		return text
 	}
 
+	markerLen := len(marker)
 	result := ""
 	remaining := text
 
 	for {
-		start := strings.Index(remaining, marker)
+		start := findNextDelimiter(remaining, marker, canOpen)
 		if start == -1 {
 			result += remaining
 			break
 		}
 
-		end := strings.Index(remaining[start+len(marker):], marker)
+		searchFrom := start + markerLen
+		end := findNextDelimiter(remaining[searchFrom:], marker, canClose)
 		if end == -1 {
 			result += remaining
 			break
 		}
+		end += searchFrom
 
-		end += start + len(marker)
 		result += remaining[:start]
-		content := remaining[start+len(marker) : end]
+		content := remaining[start+markerLen : end]
 		result += styleFn(content)
-		remaining = remaining[end+len(marker):]
+		remaining = remaining[end+markerLen:]
 	}
 
 	return result
