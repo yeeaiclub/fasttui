@@ -1,7 +1,6 @@
 package fasttui
 
 import (
-	"regexp"
 	"unicode/utf8"
 
 	"github.com/mattn/go-runewidth"
@@ -35,16 +34,31 @@ type SliceResult struct {
 	width int
 }
 
-var (
-	// Combining marks (should not be counted separately, but with base character)
-	combiningMarkRegex = regexp.MustCompile(`[\x{0300}-\x{036F}\x{1AB0}-\x{1AFF}\x{1DC0}-\x{1DFF}\x{20D0}-\x{20FF}\x{FE20}-\x{FE2F}]`)
-
-	// Pure zero-width characters (not including combining marks)
-	pureZeroWidthRegex = regexp.MustCompile(`^[\x{200B}-\x{200D}\x{FEFF}]+$`)
-)
-
 func GetSegmenter() any {
 	return nil
+}
+
+func isPureZeroWidthRune(r rune) bool {
+	return r >= 0x200B && r <= 0x200D || r == 0xFEFF
+}
+
+func isPureZeroWidthString(s string) bool {
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if !isPureZeroWidthRune(r) {
+			return false
+		}
+		i += size
+	}
+	return true
+}
+
+func isCombiningMark(r rune) bool {
+	return r >= 0x0300 && r <= 0x036F ||
+		r >= 0x1AB0 && r <= 0x1AFF ||
+		r >= 0x1DC0 && r <= 0x1DFF ||
+		r >= 0x20D0 && r <= 0x20FF ||
+		r >= 0xFE20 && r <= 0xFE2F
 }
 
 // GraphemeWidth calculates the display width of a grapheme cluster
@@ -59,40 +73,31 @@ func GraphemeWidth(s string) int {
 		return 0
 	}
 
-	// Check for pure zero-width characters
-	if pureZeroWidthRegex.MatchString(s) {
+	if isPureZeroWidthString(s) {
 		return 0
 	}
 
-	// Get the first rune
 	r, size := utf8.DecodeRuneInString(s)
 	if r == utf8.RuneError {
 		return 0
 	}
 
-	// Check if the first character is a combining mark (shouldn't happen in well-formed text)
-	if combiningMarkRegex.MatchString(string(r)) {
+	if isCombiningMark(r) {
 		return 0
 	}
 
-	// Get the base character's width using go-runewidth with our custom condition
-	// This library handles emoji, East Asian width, and other special cases
 	width := runewidthCondition.RuneWidth(r)
 
-	// Handle trailing characters
-	if len(s) > size {
-		for _, char := range s[size:] {
-			// Skip combining marks - they don't add width
-			if combiningMarkRegex.MatchString(string(char)) {
-				continue
-			}
-
-			cp := int(char)
-			// Halfwidth and Fullwidth Forms block
-			if cp >= 0xFF00 && cp <= 0xFFEF {
-				width += runewidthCondition.RuneWidth(char)
-			}
+	for i := size; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		if isCombiningMark(r) {
+			i += n
+			continue
 		}
+		if r >= 0xFF00 && r <= 0xFFEF {
+			width += runewidthCondition.RuneWidth(r)
+		}
+		i += n
 	}
 
 	return width

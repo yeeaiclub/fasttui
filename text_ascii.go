@@ -101,7 +101,7 @@ func isPrintableASCII(s string) bool {
 
 	ptr = unsafe.Add(ptr, align64)
 	tailLen := remaining & 63
-	for i := 0; i < tailLen; i++ {
+	for i := range tailLen {
 		b := *(*byte)(unsafe.Add(ptr, i))
 		if b < 0x20 || b > 0x7e {
 			return false
