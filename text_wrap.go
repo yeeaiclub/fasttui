@@ -3,25 +3,27 @@ package fasttui
 import (
 	"strings"
 	"unicode/utf8"
-
-	"github.com/clipperhouse/uax29/v2/graphemes"
 )
 
 func splitIntoTokensWithAnsi(text string) []string {
 	if isPrintableASCII(text) {
 		return splitPureASCII(text)
 	}
+	if IsASCII(text) {
+		return splitASCIITokensWithAnsi(text)
+	}
+
+	b := acquireBuilder()
+	defer releaseBuilder(b)
 
 	var tokens []string
-	var current string
-	var pendingAnsi string
 	inWhitespace := false
 	i := 0
 
 	for i < len(text) {
 		code, length, ok := ExtractAnsiCode(text, i)
 		if ok {
-			pendingAnsi += code
+			b.WriteString(code)
 			i += length
 			continue
 		}
@@ -33,27 +35,52 @@ func splitIntoTokensWithAnsi(text string) []string {
 		char := text[i : i+size]
 		charIsSpace := r == ' '
 
-		if charIsSpace != inWhitespace && current != "" {
-			tokens = append(tokens, current)
-			current = ""
-		}
-
-		if pendingAnsi != "" {
-			current += pendingAnsi
-			pendingAnsi = ""
+		if charIsSpace != inWhitespace && b.Len() > 0 {
+			tokens = append(tokens, b.String())
+			b.Reset()
 		}
 
 		inWhitespace = charIsSpace
-		current += char
+		b.WriteString(char)
 		i += size
 	}
 
-	if pendingAnsi != "" {
-		current += pendingAnsi
+	if b.Len() > 0 {
+		tokens = append(tokens, b.String())
 	}
 
-	if current != "" {
-		tokens = append(tokens, current)
+	return tokens
+}
+
+func splitASCIITokensWithAnsi(text string) []string {
+	b := acquireBuilder()
+	defer releaseBuilder(b)
+
+	var tokens []string
+	inWhitespace := false
+	i := 0
+
+	for i < len(text) {
+		code, length, ok := ExtractAnsiCode(text, i)
+		if ok {
+			b.WriteString(code)
+			i += length
+			continue
+		}
+
+		charIsSpace := text[i] == ' '
+		if charIsSpace != inWhitespace && b.Len() > 0 {
+			tokens = append(tokens, b.String())
+			b.Reset()
+		}
+
+		inWhitespace = charIsSpace
+		b.WriteByte(text[i])
+		i++
+	}
+
+	if b.Len() > 0 {
+		tokens = append(tokens, b.String())
 	}
 
 	return tokens
@@ -115,7 +142,7 @@ func wrapSingleLine(line string, width int) []string {
 		return []string{""}
 	}
 
-	if VisibleWidth(line) <= width {
+	if visibleWidthFast(line) <= width {
 		return []string{line}
 	}
 
@@ -127,7 +154,7 @@ func wrapSingleLine(line string, width int) []string {
 	currentVisibleLength := 0
 
 	for _, token := range tokens {
-		tokenVisibleLength := VisibleWidth(token)
+		tokenVisibleLength := visibleWidthFast(token)
 		isWhitespace := strings.TrimSpace(token) == ""
 
 		if tokenVisibleLength > width && !isWhitespace {
@@ -145,7 +172,7 @@ func wrapSingleLine(line string, width int) []string {
 			if len(broken) > 0 {
 				wrapped = append(wrapped, broken[:len(broken)-1]...)
 				currentLine = broken[len(broken)-1]
-				currentVisibleLength = VisibleWidth(currentLine)
+				currentVisibleLength = visibleWidthFast(currentLine)
 			}
 			continue
 		}
@@ -192,30 +219,9 @@ func breakLongWord(word string, width int, tracker *AnsiCodeTracker) []string {
 	currentLine := tracker.GetActiveCodes()
 	currentWidth := 0
 
-	var segments []textSegment
-	i := 0
-
-	for i < len(word) {
-		code, length, ok := ExtractAnsiCode(word, i)
-		if ok {
-			segments = append(segments, textSegment{segType: segmentTypeAnsi, value: code})
-			i += length
-		} else {
-			end := i
-			for end < len(word) {
-				if _, _, ok := ExtractAnsiCode(word, end); ok {
-					break
-				}
-				end++
-			}
-			textPortion := word[i:end]
-			g := graphemes.FromString(textPortion)
-			for g.Next() {
-				segments = append(segments, textSegment{segType: segmentTypeGrapheme, value: g.Value()})
-			}
-			i = end
-		}
-	}
+	segments := acquireTextSegments()
+	segments, _ = appendTextSegments(segments, word, 0)
+	defer releaseTextSegments(segments)
 
 	for _, seg := range segments {
 		if seg.segType == segmentTypeAnsi {

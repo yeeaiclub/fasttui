@@ -57,7 +57,7 @@ func StripAnsi(s string) string {
 	if !strings.Contains(s, "\x1b") {
 		return s
 	}
-	var b strings.Builder
+	b := acquireBuilder()
 	b.Grow(len(s))
 	for i := 0; i < len(s); {
 		if s[i] == '\x1b' {
@@ -69,7 +69,9 @@ func StripAnsi(s string) string {
 		b.WriteByte(s[i])
 		i++
 	}
-	return b.String()
+	out := b.String()
+	releaseBuilder(b)
+	return out
 }
 
 func extractOscOrApc(s string, pos int) (code string, length int, ok bool) {

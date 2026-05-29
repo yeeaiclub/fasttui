@@ -44,15 +44,16 @@ func TruncateToWidth(text string, maxWidth int, ellipsis string, pad bool) strin
 	}
 
 	// Separate ANSI codes from visible content using grapheme segmentation
-	segments := segmentText(text)
+	segments := scanTextSegments(text)
 
 	// Build truncated string from segments
-	result := ""
+	b := acquireBuilder()
+	defer releaseBuilder(b)
 	currentWidth := 0
 
 	for _, seg := range segments {
 		if seg.segType == segmentTypeAnsi {
-			result += seg.value
+			b.WriteString(seg.value)
 			continue
 		}
 
@@ -67,12 +68,12 @@ func TruncateToWidth(text string, maxWidth int, ellipsis string, pad bool) strin
 			break
 		}
 
-		result += grapheme
+		b.WriteString(grapheme)
 		currentWidth += graphemeWidth
 	}
 
 	// Add reset code before ellipsis to prevent styling leaking into it
-	truncated := result + "\x1b[0m" + ellipsis
+	truncated := b.String() + "\x1b[0m" + ellipsis
 
 	if pad {
 		truncatedWidth := VisibleWidth(truncated)
@@ -86,45 +87,9 @@ func TruncateToWidth(text string, maxWidth int, ellipsis string, pad bool) strin
 	return truncated
 }
 
-// segmentText separates ANSI codes from visible content using grapheme segmentation
+// segmentText separates ANSI codes from visible content using grapheme segmentation.
 func segmentText(text string) []textSegment {
-	segments := []textSegment{}
-	i := 0
-
-	for i < len(text) {
-		// Try to extract ANSI code at current position
-		code, length, ok := ExtractAnsiCode(text, i)
-		if ok {
-			segments = append(segments, textSegment{
-				segType: segmentTypeAnsi,
-				value:   code,
-			})
-			i += length
-		} else {
-			// Find the next ANSI code or end of string
-			end := i
-			for end < len(text) {
-				if _, _, ok := ExtractAnsiCode(text, end); ok {
-					break
-				}
-				end++
-			}
-
-			// Segment this non-ANSI portion into graphemes
-			textPortion := text[i:end]
-			g := graphemes.FromString(textPortion)
-			for g.Next() {
-				segments = append(segments, textSegment{
-					segType: segmentTypeGrapheme,
-					value:   g.Value(),
-				})
-			}
-
-			i = end
-		}
-	}
-
-	return segments
+	return scanTextSegments(text)
 }
 
 // truncateEllipsis truncates the ellipsis string itself to fit maxWidth
@@ -133,8 +98,9 @@ func truncateEllipsis(ellipsis string, maxWidth int) string {
 		return ""
 	}
 
+	b := acquireBuilder()
+	defer releaseBuilder(b)
 	currentWidth := 0
-	result := ""
 
 	g := graphemes.FromString(ellipsis)
 	for g.Next() {
@@ -145,9 +111,9 @@ func truncateEllipsis(ellipsis string, maxWidth int) string {
 			break
 		}
 
-		result += grapheme
+		b.WriteString(grapheme)
 		currentWidth += graphemeWidth
 	}
 
-	return result
+	return b.String()
 }

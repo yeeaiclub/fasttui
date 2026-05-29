@@ -23,6 +23,43 @@ var (
 // - Emoji (typically width 2)
 // - Combining marks (width 0)
 // - Regular ASCII (width 1)
+func visibleWidthASCIIWithAnsi(s string) (int, bool) {
+	if !IsASCII(s) {
+		return 0, false
+	}
+
+	width := 0
+	for i := 0; i < len(s); {
+		switch s[i] {
+		case '\t':
+			width += 3
+			i++
+		case '\x1b':
+			if _, n, ok := ExtractAnsiCode(s, i); ok {
+				i += n
+				continue
+			}
+			width++
+			i++
+		default:
+			width++
+			i++
+		}
+	}
+	return width, true
+}
+
+// visibleWidthFast is the hot-path width helper used during wrapping and layout.
+func visibleWidthFast(s string) int {
+	if isPrintableASCII(s) {
+		return len(s)
+	}
+	if w, ok := visibleWidthASCIIWithAnsi(s); ok {
+		return w
+	}
+	return VisibleWidth(s)
+}
+
 func VisibleWidth(s string) int {
 	if len(s) == 0 {
 		return 0
@@ -30,6 +67,10 @@ func VisibleWidth(s string) int {
 
 	if isPrintableASCII(s) {
 		return len(s)
+	}
+
+	if w, ok := visibleWidthASCIIWithAnsi(s); ok {
+		return w
 	}
 
 	// Check cache
