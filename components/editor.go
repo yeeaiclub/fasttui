@@ -6,6 +6,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/clipperhouse/uax29/v2/graphemes"
 	"github.com/yeeaiclub/fasttui"
 	"github.com/yeeaiclub/fasttui/keys"
 )
@@ -668,70 +669,265 @@ type LayoutLine struct {
 	CursorPos int    // cursor position within the line
 }
 
-// cursorIndexInRunes converts a byte-based cursor column into a rune index
-// within the given line, clamping the column to the line length to avoid
-// slicing beyond bounds. If hasCursor is false, it always returns 0.
-func cursorIndexInRunes(line string, cursorCol int, hasCursor bool) int {
-	if !hasCursor {
-		return 0
-	}
-
-	if cursorCol > len(line) {
-		cursorCol = len(line)
-	}
-	return len([]rune(line[:cursorCol]))
+type textChunk struct {
+	text       string
+	startIndex int
+	endIndex   int
 }
 
-// wrapChunkAtWidth returns the end rune index and text chunk for a single
-// visual line starting at the given rune index, ensuring at least one rune
-// is consumed even if its width exceeds contentWidth.
-func wrapChunkAtWidth(runes []rune, start int, contentWidth int) (int, string) {
-	end := start
-	width := 0
+type graphemeSeg struct {
+	text  string
+	index int
+}
 
-	for end < len(runes) {
-		rw := fasttui.GraphemeWidth(string(runes[end]))
-		if width+rw > contentWidth {
-			break
+func collectGraphemeSegments(line string) []graphemeSeg {
+	segments := make([]graphemeSeg, 0, len(line))
+	g := graphemes.FromString(line)
+	for g.Next() {
+		segments = append(segments, graphemeSeg{
+			text:  g.Value(),
+			index: g.Start(),
+		})
+	}
+	return segments
+}
+
+// wordWrapLine splits a line into word-wrapped chunks using grapheme clusters,
+// mirroring editor.ts wordWrapLine (Intl.Segmenter + wrap opportunities).
+func wordWrapLine(line string, maxWidth int) []textChunk {
+	if line == "" || maxWidth <= 0 {
+		return []textChunk{{text: "", startIndex: 0, endIndex: 0}}
+	}
+	if fasttui.VisibleWidth(line) <= maxWidth {
+		return []textChunk{{text: line, startIndex: 0, endIndex: len(line)}}
+	}
+
+	// Indivisible grapheme wider than maxWidth — emit as one visual chunk.
+	g := graphemes.FromString(line)
+	if g.Next() {
+		grapheme := g.Value()
+		if !g.Next() && fasttui.GraphemeWidth(grapheme) > maxWidth {
+			return []textChunk{{text: line, startIndex: 0, endIndex: len(line)}}
 		}
-		width += rw
-		end++
 	}
 
-	if end == start && start < len(runes) {
-		end = start + 1
+	segments := collectGraphemeSegments(line)
+	chunks := make([]textChunk, 0, 4)
+	currentWidth := 0
+	chunkStart := 0
+	wrapOppIndex := -1
+	wrapOppWidth := 0
+
+	for i, seg := range segments {
+		grapheme := seg.text
+		gWidth := fasttui.GraphemeWidth(grapheme)
+		charIndex := seg.index
+		isWs := fasttui.IsWhitespaceChar(grapheme)
+
+		if currentWidth+gWidth > maxWidth {
+			if wrapOppIndex >= 0 && currentWidth-wrapOppWidth+gWidth <= maxWidth {
+				chunks = append(chunks, textChunk{
+					text:       line[chunkStart:wrapOppIndex],
+					startIndex: chunkStart,
+					endIndex:   wrapOppIndex,
+				})
+				chunkStart = wrapOppIndex
+				currentWidth -= wrapOppWidth
+			} else if chunkStart < charIndex {
+				chunks = append(chunks, textChunk{
+					text:       line[chunkStart:charIndex],
+					startIndex: chunkStart,
+					endIndex:   charIndex,
+				})
+				chunkStart = charIndex
+				currentWidth = 0
+			}
+			wrapOppIndex = -1
+		}
+
+		if gWidth > maxWidth {
+			subChunks := wordWrapLine(grapheme, maxWidth)
+			for j := 0; j < len(subChunks)-1; j++ {
+				sc := subChunks[j]
+				chunks = append(chunks, textChunk{
+					text:       sc.text,
+					startIndex: charIndex + sc.startIndex,
+					endIndex:   charIndex + sc.endIndex,
+				})
+			}
+			last := subChunks[len(subChunks)-1]
+			chunkStart = charIndex + last.startIndex
+			currentWidth = fasttui.VisibleWidth(last.text)
+			wrapOppIndex = -1
+			continue
+		}
+
+		currentWidth += gWidth
+
+		if i+1 < len(segments) {
+			next := segments[i+1]
+			if isWs && !fasttui.IsWhitespaceChar(next.text) {
+				wrapOppIndex = next.index
+				wrapOppWidth = currentWidth
+			}
+		}
 	}
 
-	return end, string(runes[start:end])
+	chunks = append(chunks, textChunk{
+		text:       line[chunkStart:],
+		startIndex: chunkStart,
+		endIndex:   len(line),
+	})
+	return chunks
 }
 
-func wrapLine(line string, contentWidth int, cursorCol int, hasCursor bool) []LayoutLine {
-	runes := []rune(line)
-	var layoutLines []LayoutLine
-
-	cursorIndex := cursorIndexInRunes(line, cursorCol, hasCursor)
-
-	start := 0
-	for start < len(runes) {
-		end, chunk := wrapChunkAtWidth(runes, start, contentWidth)
-
-		lineHasCursor := false
+func layoutChunksAsLines(chunks []textChunk, cursorCol int, hasCursor bool) []LayoutLine {
+	layoutLines := make([]LayoutLine, 0, len(chunks))
+	for i, chunk := range chunks {
+		isLast := i == len(chunks)-1
+		hasCursorInChunk := false
 		cursorPos := 0
-		if hasCursor && cursorIndex >= start && cursorIndex <= end {
-			lineHasCursor = true
-			cursorPos = len(string(runes[start:min(cursorIndex, end)]))
+
+		if hasCursor {
+			if isLast {
+				hasCursorInChunk = cursorCol >= chunk.startIndex
+				cursorPos = cursorCol - chunk.startIndex
+			} else {
+				hasCursorInChunk = cursorCol >= chunk.startIndex && cursorCol < chunk.endIndex
+				if hasCursorInChunk {
+					cursorPos = cursorCol - chunk.startIndex
+					if cursorPos > len(chunk.text) {
+						cursorPos = len(chunk.text)
+					}
+				}
+			}
 		}
 
 		layoutLines = append(layoutLines, LayoutLine{
-			Text:      chunk,
+			Text:      chunk.text,
+			HasCursor: hasCursorInChunk,
+			CursorPos: cursorPos,
+		})
+	}
+	return layoutLines
+}
+
+func wrapLineGrapheme(line string, contentWidth int, cursorCol int, hasCursor bool) []LayoutLine {
+	if line == "" {
+		return nil
+	}
+	chunks := wordWrapLine(line, contentWidth)
+	return layoutChunksAsLines(chunks, cursorCol, hasCursor)
+}
+
+func wrapChunkEndAtWidth(line string, start, contentWidth int, tabWidth int) int {
+	end := start
+	width := 0
+	for end < len(line) {
+		w := 1
+		if tabWidth > 0 && line[end] == '\t' {
+			w = tabWidth
+		}
+		if width+w > contentWidth && width > 0 {
+			break
+		}
+		width += w
+		end++
+	}
+	if end == start && start < len(line) {
+		end = start + 1
+	}
+	return end
+}
+
+func wrapLinePrintableASCII(line string, contentWidth int, cursorCol int, hasCursor bool) []LayoutLine {
+	if line == "" {
+		return nil
+	}
+
+	var layoutLines []LayoutLine
+	start := 0
+	for start < len(line) {
+		end := wrapChunkEndAtWidth(line, start, contentWidth, 0)
+
+		lineHasCursor := false
+		cursorPos := 0
+		if hasCursor && cursorCol >= start && cursorCol <= end {
+			lineHasCursor = true
+			cursorPos = cursorCol - start
+		}
+
+		layoutLines = append(layoutLines, LayoutLine{
+			Text:      line[start:end],
 			HasCursor: lineHasCursor,
 			CursorPos: cursorPos,
 		})
-
 		start = end
 	}
-
 	return layoutLines
+}
+
+func wrapLineASCII(line string, contentWidth int, cursorCol int, hasCursor bool) []LayoutLine {
+	if line == "" {
+		return nil
+	}
+
+	var layoutLines []LayoutLine
+	start := 0
+	for start < len(line) {
+		end := wrapChunkEndAtWidth(line, start, contentWidth, 3)
+
+		lineHasCursor := false
+		cursorPos := 0
+		if hasCursor && cursorCol >= start && cursorCol <= end {
+			lineHasCursor = true
+			cursorPos = cursorCol - start
+		}
+
+		layoutLines = append(layoutLines, LayoutLine{
+			Text:      line[start:end],
+			HasCursor: lineHasCursor,
+			CursorPos: cursorPos,
+		})
+		start = end
+	}
+	return layoutLines
+}
+
+func wrapLine(line string, contentWidth int, cursorCol int, hasCursor bool) []LayoutLine {
+	if line == "" {
+		return nil
+	}
+	if fasttui.IsPrintableASCII(line) {
+		if len(line) <= contentWidth {
+			cursorPos := 0
+			if hasCursor {
+				cursorPos = min(cursorCol, len(line))
+			}
+			return []LayoutLine{{
+				Text:      line,
+				HasCursor: hasCursor,
+				CursorPos: cursorPos,
+			}}
+		}
+		return wrapLinePrintableASCII(line, contentWidth, cursorCol, hasCursor)
+	}
+	if fasttui.IsASCII(line) {
+		if fasttui.VisibleWidth(line) <= contentWidth {
+			cursorPos := 0
+			if hasCursor {
+				cursorPos = min(cursorCol, len(line))
+			}
+			return []LayoutLine{{
+				Text:      line,
+				HasCursor: hasCursor,
+				CursorPos: cursorPos,
+			}}
+		}
+		return wrapLineASCII(line, contentWidth, cursorCol, hasCursor)
+	}
+
+	return wrapLineGrapheme(line, contentWidth, cursorCol, hasCursor)
 }
 
 func (e *Editor) layoutText(contentWidth int) []LayoutLine {

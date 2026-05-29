@@ -1,6 +1,7 @@
 package components
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -118,6 +119,39 @@ func TestWrapLine(t *testing.T) {
 				{Text: "界", HasCursor: false, CursorPos: 0},
 			},
 		},
+		{
+			name:         "unicode word wrap at whitespace",
+			line:         "hello 世界",
+			contentWidth: 8,
+			cursorCol:    0,
+			hasCursor:    false,
+			want: []LayoutLine{
+				{Text: "hello ", HasCursor: false, CursorPos: 0},
+				{Text: "世界", HasCursor: false, CursorPos: 0},
+			},
+		},
+		{
+			name:         "unicode word wrap cursor in second chunk",
+			line:         "hello 世界",
+			contentWidth: 8,
+			cursorCol:    6,
+			hasCursor:    true,
+			want: []LayoutLine{
+				{Text: "hello ", HasCursor: false, CursorPos: 0},
+				{Text: "世界", HasCursor: true, CursorPos: 0},
+			},
+		},
+		{
+			name:         "ascii with tab wraps by display width",
+			line:         "a\tbc",
+			contentWidth: 4,
+			cursorCol:    0,
+			hasCursor:    false,
+			want: []LayoutLine{
+				{Text: "a\t", HasCursor: false, CursorPos: 0},
+				{Text: "bc", HasCursor: false, CursorPos: 0},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -125,5 +159,21 @@ func TestWrapLine(t *testing.T) {
 			got := wrapLine(tt.line, tt.contentWidth, tt.cursorCol, tt.hasCursor)
 			assert.Equal(t, tt.want, got)
 		})
+	}
+}
+
+func BenchmarkWrapLine_printableASCII(b *testing.B) {
+	line := "The quick brown fox jumps over the lazy dog. " + strings.Repeat("task_name ", 40)
+
+	for b.Loop() {
+		_ = wrapLine(line, 80, 40, true)
+	}
+}
+
+func BenchmarkWrapLine_unicode(b *testing.B) {
+	line := strings.Repeat("你好世界 ", 40)
+
+	for b.Loop() {
+		_ = wrapLine(line, 80, 40, true)
 	}
 }

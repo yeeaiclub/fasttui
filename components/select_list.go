@@ -69,7 +69,8 @@ func NewSelectList(items []SelectItem, maxVisible int, opts ...SelectListOption)
 }
 
 func (s *SelectList) Render(width int) []string {
-	var lines []string
+	visible := min(s.maxVisible, len(s.filteredItems))
+	lines := make([]string, 0, visible+1)
 
 	if len(s.filteredItems) == 0 {
 		if s.theme.NoMatch != nil {

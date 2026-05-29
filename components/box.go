@@ -3,10 +3,13 @@ package components
 import (
 	"hash"
 	"hash/fnv"
+	"slices"
 	"strings"
 
 	"github.com/yeeaiclub/fasttui"
 )
+
+const defaultBoxChildrenCap = 4
 
 var _ fasttui.Component = (*Box)(nil)
 
@@ -40,11 +43,9 @@ func NewBox(paddingX, paddingY int, opts ...BoxOption) *Box {
 		paddingY = 0
 	}
 	b := &Box{
-		children:    nil,
-		paddingX:    paddingX,
-		paddingY:    paddingY,
-		cacheKey:    0,
-		cacheResult: nil,
+		children: make([]fasttui.Component, 0, defaultBoxChildrenCap),
+		paddingX: paddingX,
+		paddingY: paddingY,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -64,7 +65,7 @@ func (b *Box) AddChild(component fasttui.Component) {
 func (b *Box) RemoveChild(component fasttui.Component) {
 	for i, c := range b.children {
 		if c == component {
-			b.children = append(b.children[:i], b.children[i+1:]...)
+			b.children = slices.Delete(b.children, i, i+1)
 			b.invalidateCache()
 			return
 		}
@@ -73,7 +74,7 @@ func (b *Box) RemoveChild(component fasttui.Component) {
 
 // Clear removes all children and invalidates the cache.
 func (b *Box) Clear() {
-	b.children = nil
+	b.children = b.children[:0]
 	b.invalidateCache()
 }
 
@@ -138,7 +139,7 @@ func (b *Box) Render(width int) []string {
 	contentWidth := max(1, width-b.paddingX*2)
 	leftPad := strings.Repeat(" ", b.paddingX)
 
-	var childLines []string
+	childLines := make([]string, 0, len(b.children)*2)
 	for _, child := range b.children {
 		lines := child.Render(contentWidth)
 		for _, line := range lines {

@@ -110,3 +110,8 @@ func isPrintableASCII(s string) bool {
 
 	return true
 }
+
+// IsPrintableASCII reports whether s contains only printable ASCII (0x20-0x7e).
+func IsPrintableASCII(s string) bool {
+	return isPrintableASCII(s)
+}

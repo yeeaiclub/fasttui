@@ -21,11 +21,21 @@ func acquireBuilder() *strings.Builder {
 	return b
 }
 
+// AcquireBuilder returns a pooled strings.Builder. Call ReleaseBuilder when done.
+func AcquireBuilder() *strings.Builder {
+	return acquireBuilder()
+}
+
 func releaseBuilder(b *strings.Builder) {
 	if b.Cap() > maxPooledBuilderCap {
 		return
 	}
 	builderPool.Put(b)
+}
+
+// ReleaseBuilder returns a builder from AcquireBuilder to the pool.
+func ReleaseBuilder(b *strings.Builder) {
+	releaseBuilder(b)
 }
 
 const maxPooledSegmentCap = 4096

@@ -400,31 +400,32 @@ func (m *Markdown) replaceInlineStyle(text string, marker string, styleFn func(s
 	}
 
 	markerLen := len(marker)
-	result := ""
+	bld := fasttui.AcquireBuilder()
+	defer fasttui.ReleaseBuilder(bld)
 	remaining := text
 
 	for {
 		start := findNextDelimiter(remaining, marker, canOpen)
 		if start == -1 {
-			result += remaining
+			bld.WriteString(remaining)
 			break
 		}
 
 		searchFrom := start + markerLen
 		end := findNextDelimiter(remaining[searchFrom:], marker, canClose)
 		if end == -1 {
-			result += remaining
+			bld.WriteString(remaining)
 			break
 		}
 		end += searchFrom
 
-		result += remaining[:start]
+		bld.WriteString(remaining[:start])
 		content := remaining[start+markerLen : end]
-		result += styleFn(content)
+		bld.WriteString(styleFn(content))
 		remaining = remaining[end+markerLen:]
 	}
 
-	return result
+	return bld.String()
 }
 
 func (m *Markdown) replaceInlineCode(text string) string {
@@ -560,7 +561,7 @@ func (m *Markdown) applyPaddingAndBackground(lines []string, width int) []string
 		bgFn = m.defaultTextStyle.BgColor
 	}
 
-	contentLines := []string{}
+	contentLines := make([]string, 0, len(lines)*2)
 
 	for _, line := range lines {
 		// Wrap long lines so no line exceeds terminal width (avoids panic in TUI)
@@ -582,7 +583,7 @@ func (m *Markdown) applyPaddingAndBackground(lines []string, width int) []string
 
 	// Add top/bottom padding
 	emptyLine := strings.Repeat(" ", width)
-	emptyLines := []string{}
+	emptyLines := make([]string, 0, m.paddingY)
 	for i := 0; i < m.paddingY; i++ {
 		line := emptyLine
 		if bgFn != nil {
@@ -591,7 +592,9 @@ func (m *Markdown) applyPaddingAndBackground(lines []string, width int) []string
 		emptyLines = append(emptyLines, line)
 	}
 
-	result := append(emptyLines, contentLines...)
+	result := make([]string, 0, m.paddingY*2+len(contentLines))
+	result = append(result, emptyLines...)
+	result = append(result, contentLines...)
 	result = append(result, emptyLines...)
 
 	return result
