@@ -91,6 +91,9 @@ func isTerminator(b byte) bool {
 }
 
 func updateTrackerFromText(text string, tracker *AnsiCodeTracker) {
+	if isPrintableASCII(text) {
+		return
+	}
 	i := 0
 	for i < len(text) {
 		code, length, ok := ExtractAnsiCode(text, i)
