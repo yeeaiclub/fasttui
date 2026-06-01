@@ -1,6 +1,7 @@
 package components
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -93,6 +94,19 @@ func TestApplyPaddingAndBackground_NoExceedWidth(t *testing.T) {
 		assert.LessOrEqual(t, fasttui.VisibleWidth(line), width,
 			"line %d must not exceed terminal width (prevents TUI panic)", i)
 	}
+}
+
+func TestRenderInline_LinkAfterBoldANSI(t *testing.T) {
+	m := NewMarkdown("", 0, 0, WithMarkdownTheme(&MarkdownTheme{
+		Bold: func(s string) string { return "\x1b[1m" + s + "\x1b[0m" },
+		Link: func(s string) string { return "\x1b[36m" + s + "\x1b[0m" },
+	}))
+
+	got := m.renderInline("**位置：** [features/equal/equal.go:247-256](features/equal/equal.go#L247-L256)")
+
+	assert.True(t, strings.HasPrefix(got, "\x1b[1m位置："))
+	assert.NotContains(t, fasttui.StripAnsi(got), "1m位置")
+	assert.Equal(t, "位置： features/equal/equal.go:247-256 (features/equal/equal.go#L247-L256)", fasttui.StripAnsi(got))
 }
 
 func TestRenderInline_PreservesSnakeCase(t *testing.T) {

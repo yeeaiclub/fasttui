@@ -33,19 +33,19 @@ type Focusable interface {
 	IsFocused() bool
 }
 
-type RenderRequest struct {
-	force bool
-}
+type eventKind uint8
 
-type InputRequest struct {
-	data string
-}
+const (
+	eventRender eventKind = iota
+	eventForceRender
+	eventInput
+	eventFocus
+	eventQuery
+)
 
-type FocusRequest struct {
+type tuiEvent struct {
+	kind      eventKind
+	data      string
 	component Component
-}
-
-type QueryRequest struct {
-	action   string // "getShowHardwareCursor", "getFullRedraws"
-	response chan any
+	response  chan any
 }

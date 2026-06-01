@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/yeeaiclub/fasttui/keys"
 )
@@ -19,14 +20,11 @@ var (
 
 type TUI struct {
 	Container
-	stopped  bool
+	stopped  atomic.Bool
 	terminal Terminal
 
 	fullRedrawCount int
-	renderChan      chan RenderRequest
-	inputChan       chan InputRequest
-	focusChan       chan FocusRequest
-	queryChan       chan QueryRequest
+	eventChan       chan tuiEvent
 	stopChan        chan struct{}
 
 	previousLines       []string // previous rendered line contents
@@ -51,10 +49,7 @@ type TUI struct {
 
 func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 	t := &TUI{
-		renderChan:         make(chan RenderRequest, 10),
-		inputChan:          make(chan InputRequest, 100),
-		focusChan:          make(chan FocusRequest, 10),
-		queryChan:          make(chan QueryRequest, 10),
+		eventChan:          make(chan tuiEvent, 128),
 		stopChan:           make(chan struct{}),
 		terminal:           terminal,
 		showHardwareCursor: showHardwareCursor,
@@ -72,17 +67,17 @@ func (t *TUI) Start() {
 }
 
 func (t *TUI) Stop() {
-	if !t.stopped {
-		t.stopped = true
-		close(t.stopChan)
-		<-t.eventLoopDone
-		t.terminal.Stop()
+	if !t.stopped.CompareAndSwap(false, true) {
+		return
 	}
+	close(t.stopChan)
+	<-t.eventLoopDone
+	t.terminal.Stop()
 }
 
 func (t *TUI) TriggerRender() {
 	select {
-	case t.renderChan <- RenderRequest{force: false}:
+	case t.eventChan <- tuiEvent{kind: eventRender}:
 	case <-t.stopChan:
 	default:
 	}
@@ -90,7 +85,7 @@ func (t *TUI) TriggerRender() {
 
 func (t *TUI) ForceRender() {
 	select {
-	case t.renderChan <- RenderRequest{force: true}:
+	case t.eventChan <- tuiEvent{kind: eventForceRender}:
 	case <-t.stopChan:
 	default:
 	}
@@ -109,22 +104,22 @@ func (t *TUI) eventLoop() {
 		case <-t.stopChan:
 			return
 
-		case req := <-t.renderChan:
-			if req.force {
+		case ev := <-t.eventChan:
+			switch ev.kind {
+			case eventRender:
+				pendingRender = true
+			case eventForceRender:
 				forceRender = true
+				pendingRender = true
+			case eventInput:
+				t.handleInput(ev.data)
+				pendingRender = true
+			case eventFocus:
+				t.setFocus(ev.component)
+				pendingRender = true
+			case eventQuery:
+				t.handleQueryRequest(ev)
 			}
-			pendingRender = true
-
-		case input := <-t.inputChan:
-			t.handleInput(input.data)
-			pendingRender = true
-
-		case focus := <-t.focusChan:
-			t.setFocus(focus.component)
-			pendingRender = true
-
-		case query := <-t.queryChan:
-			t.handleQueryRequest(query)
 		}
 
 		if pendingRender {
@@ -151,7 +146,7 @@ func (t *TUI) forceRender() {
 }
 
 func (t *TUI) doRender() {
-	if t.stopped {
+	if t.stopped.Load() {
 		return
 	}
 
@@ -472,7 +467,7 @@ func (t *TUI) getFullRender(newLines []string, height int, row int, col int, wid
 }
 
 func (t *TUI) start() error {
-	t.stopped = false
+	t.stopped.Store(false)
 	return t.terminal.Start(
 		func(data string) {
 			t.HandleInput(data)
@@ -483,24 +478,24 @@ func (t *TUI) start() error {
 	)
 }
 
-func (t *TUI) handleQueryRequest(query QueryRequest) {
+func (t *TUI) handleQueryRequest(ev tuiEvent) {
 	switch {
-	case query.action == "getShowHardwareCursor":
-		query.response <- t.showHardwareCursor
-	case query.action == "getFullRedraws":
-		query.response <- t.fullRedrawCount
-	case query.action == "queryCellSize":
+	case ev.data == "getShowHardwareCursor":
+		ev.response <- t.showHardwareCursor
+	case ev.data == "getFullRedraws":
+		ev.response <- t.fullRedrawCount
+	case ev.data == "queryCellSize":
 		t.cellSizeQueryPending = true
 		t.terminal.Write("\x1b[16t")
-		close(query.response)
-	case strings.HasPrefix(query.action, "setShowHardwareCursor_"):
-		enabled := strings.HasSuffix(query.action, "true")
+		close(ev.response)
+	case strings.HasPrefix(ev.data, "setShowHardwareCursor_"):
+		enabled := strings.HasSuffix(ev.data, "true")
 		t.setShowHardwareCursor(enabled)
-		close(query.response)
-	case strings.HasPrefix(query.action, "setClearOnShrink_"):
-		enabled := strings.HasSuffix(query.action, "true")
+		close(ev.response)
+	case strings.HasPrefix(ev.data, "setClearOnShrink_"):
+		enabled := strings.HasSuffix(ev.data, "true")
 		t.clearOnShrink = enabled
-		close(query.response)
+		close(ev.response)
 	}
 }
 
@@ -509,7 +504,7 @@ func (t *TUI) handleQueryRequest(query QueryRequest) {
 // This method switches the "input focus": first unfocus the old component, then focus the new one.
 func (t *TUI) SetFocus(component Component) {
 	select {
-	case t.focusChan <- FocusRequest{component: component}:
+	case t.eventChan <- tuiEvent{kind: eventFocus, component: component}:
 	case <-t.stopChan:
 	}
 }
@@ -535,7 +530,7 @@ func (t *TUI) setFocus(component Component) {
 
 func (t *TUI) HandleInput(data string) {
 	select {
-	case t.inputChan <- InputRequest{data: data}:
+	case t.eventChan <- tuiEvent{kind: eventInput, data: data}:
 	case <-t.stopChan:
 	}
 }
@@ -595,7 +590,7 @@ var SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
 
 func (t *TUI) SetShowHardwareCursor(enabled bool) {
 	select {
-	case t.queryChan <- QueryRequest{action: "setShowHardwareCursor_" + fmt.Sprintf("%v", enabled), response: make(chan interface{}, 1)}:
+	case t.eventChan <- tuiEvent{kind: eventQuery, data: "setShowHardwareCursor_" + fmt.Sprintf("%v", enabled), response: make(chan any, 1)}:
 	case <-t.stopChan:
 	}
 }
@@ -612,7 +607,7 @@ func (t *TUI) setShowHardwareCursor(enabled bool) {
 
 func (t *TUI) SetClearOnShrink(enabled bool) {
 	select {
-	case t.queryChan <- QueryRequest{action: "setClearOnShrink_" + fmt.Sprintf("%v", enabled), response: make(chan any, 1)}:
+	case t.eventChan <- tuiEvent{kind: eventQuery, data: "setClearOnShrink_" + fmt.Sprintf("%v", enabled), response: make(chan any, 1)}:
 	case <-t.stopChan:
 	}
 }
@@ -622,7 +617,7 @@ func (t *TUI) QueryCellSize() {
 		return
 	}
 	select {
-	case t.queryChan <- QueryRequest{action: "queryCellSize", response: make(chan any, 1)}:
+	case t.eventChan <- tuiEvent{kind: eventQuery, data: "queryCellSize", response: make(chan any, 1)}:
 	case <-t.stopChan:
 	}
 }
@@ -630,7 +625,7 @@ func (t *TUI) QueryCellSize() {
 func (t *TUI) GetFullRedraws() int {
 	respChan := make(chan any, 1)
 	select {
-	case t.queryChan <- QueryRequest{action: "getFullRedraws", response: respChan}:
+	case t.eventChan <- tuiEvent{kind: eventQuery, data: "getFullRedraws", response: respChan}:
 		result := <-respChan
 		return result.(int)
 	case <-t.stopChan:
@@ -641,7 +636,7 @@ func (t *TUI) GetFullRedraws() int {
 func (t *TUI) GetShowHardwareCursor() bool {
 	respChan := make(chan any, 1)
 	select {
-	case t.queryChan <- QueryRequest{action: "getShowHardwareCursor", response: respChan}:
+	case t.eventChan <- tuiEvent{kind: eventQuery, data: "getShowHardwareCursor", response: respChan}:
 		result := <-respChan
 		return result.(bool)
 	case <-t.stopChan:

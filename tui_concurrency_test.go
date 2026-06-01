@@ -8,86 +8,86 @@ import (
 	"time"
 )
 
-// MockTerminal for testing
-type MockTerminal struct {
+type testTerminal struct {
 	onInput  func(data string)
 	onResize func()
-	stopped  bool
+	stopped  atomic.Bool
 }
 
-func (m *MockTerminal) Start(onInput func(data string), onResize func()) error {
+func (m *testTerminal) Start(onInput func(data string), onResize func()) error {
 	m.onInput = onInput
 	m.onResize = onResize
 	return nil
 }
 
-func (m *MockTerminal) Stop() {
-	m.stopped = true
+func (m *testTerminal) Stop() {
+	m.stopped.Store(true)
 }
 
-func (m *MockTerminal) Write(data string) {}
+func (m *testTerminal) Write(data string) {}
 
-func (m *MockTerminal) GetSize() (int, int) {
+func (m *testTerminal) GetSize() (int, int) {
 	return 80, 24
 }
 
-func (m *MockTerminal) IsKittyProtocolActive() bool {
+func (m *testTerminal) IsKittyProtocolActive() bool {
 	return false
 }
 
-func (m *MockTerminal) MoveBy(lines int)      {}
-func (m *MockTerminal) HideCursor()           {}
-func (m *MockTerminal) ShowCursor()           {}
-func (m *MockTerminal) ClearLine()            {}
-func (m *MockTerminal) ClearFromCursor()      {}
-func (m *MockTerminal) ClearScreen()          {}
-func (m *MockTerminal) SetTitle(title string) {}
+func (m *testTerminal) MoveBy(lines int)      {}
+func (m *testTerminal) HideCursor()           {}
+func (m *testTerminal) ShowCursor()           {}
+func (m *testTerminal) ClearLine()            {}
+func (m *testTerminal) ClearFromCursor()      {}
+func (m *testTerminal) ClearScreen()          {}
+func (m *testTerminal) SetTitle(title string) {}
 
-// MockComponent for testing
-type MockComponent struct {
-	renderCount int
-	inputCount  int
-	focused     bool
+type concurrencyLineComponent struct {
+	lines []string
 }
 
-func (m *MockComponent) Render(width int) []string {
-	m.renderCount++
-	return []string{"test"}
+func (c *concurrencyLineComponent) Render(width int) []string { return c.lines }
+func (c *concurrencyLineComponent) HandleInput(string)        {}
+func (c *concurrencyLineComponent) WantsKeyRelease() bool     { return false }
+func (c *concurrencyLineComponent) Invalidate()               {}
+
+type concurrencyFocusComponent struct {
+	lines      []string
+	inputCount atomic.Int32
+	focused    atomic.Bool
 }
 
-func (m *MockComponent) HandleInput(data string) {
-	m.inputCount++
+func (c *concurrencyFocusComponent) Render(width int) []string { return c.lines }
+func (c *concurrencyFocusComponent) HandleInput(string) {
+	c.inputCount.Add(1)
+}
+func (c *concurrencyFocusComponent) WantsKeyRelease() bool { return false }
+func (c *concurrencyFocusComponent) Invalidate()           {}
+func (c *concurrencyFocusComponent) SetFocused(focused bool) {
+	c.focused.Store(focused)
+}
+func (c *concurrencyFocusComponent) IsFocused() bool {
+	return c.focused.Load()
 }
 
-func (m *MockComponent) WantsKeyRelease() bool {
-	return false
+func newLineComponent(lines ...string) *concurrencyLineComponent {
+	return &concurrencyLineComponent{lines: lines}
 }
 
-func (m *MockComponent) Invalidate() {}
-
-func (m *MockComponent) SetFocused(focused bool) {
-	m.focused = focused
+func newFocusComponent(lines ...string) *concurrencyFocusComponent {
+	return &concurrencyFocusComponent{lines: lines}
 }
 
-func (m *MockComponent) IsFocused() bool {
-	return m.focused
-}
-
-// TestConcurrentRenderRequests tests that multiple concurrent render requests don't cause race conditions
 func TestConcurrentRenderRequests(t *testing.T) {
-	term := &MockTerminal{}
+	term := &testTerminal{}
 	tui := NewTUI(term, false)
 	tui.Start()
 	defer tui.Stop()
 
-	// Give event loop time to start
 	time.Sleep(10 * time.Millisecond)
 
 	var wg sync.WaitGroup
-	numGoroutines := 100
-
-	// Trigger many concurrent renders
-	for i := 0; i < numGoroutines; i++ {
+	for range 100 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -96,17 +96,14 @@ func TestConcurrentRenderRequests(t *testing.T) {
 	}
 
 	wg.Wait()
-	time.Sleep(50 * time.Millisecond) // Let renders complete
-
-	// If we get here without panic, the test passes
+	time.Sleep(50 * time.Millisecond)
 }
 
-// TestConcurrentInputAndRender tests concurrent input handling and rendering
 func TestConcurrentInputAndRender(t *testing.T) {
-	term := &MockTerminal{}
+	term := &testTerminal{}
 	tui := NewTUI(term, false)
 
-	comp := &MockComponent{}
+	comp := newFocusComponent("test")
 	tui.AddChild(comp)
 	tui.SetFocus(comp)
 
@@ -116,10 +113,9 @@ func TestConcurrentInputAndRender(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	var wg sync.WaitGroup
-	numOps := 50
+	const numOps = 50
 
-	// Concurrent input handling
-	for i := 0; i < numOps; i++ {
+	for range numOps {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -127,8 +123,7 @@ func TestConcurrentInputAndRender(t *testing.T) {
 		}()
 	}
 
-	// Concurrent render requests
-	for i := 0; i < numOps; i++ {
+	for range numOps {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -139,19 +134,17 @@ func TestConcurrentInputAndRender(t *testing.T) {
 	wg.Wait()
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify component received inputs
-	if comp.inputCount == 0 {
+	if comp.inputCount.Load() == 0 {
 		t.Error("Component should have received input")
 	}
 }
 
-// TestConcurrentFocusChanges tests concurrent focus changes
 func TestConcurrentFocusChanges(t *testing.T) {
-	term := &MockTerminal{}
+	term := &testTerminal{}
 	tui := NewTUI(term, false)
 
-	comp1 := &MockComponent{}
-	comp2 := &MockComponent{}
+	comp1 := newFocusComponent("a")
+	comp2 := newFocusComponent("b")
 	tui.AddChild(comp1)
 	tui.AddChild(comp2)
 
@@ -161,10 +154,7 @@ func TestConcurrentFocusChanges(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	var wg sync.WaitGroup
-	numOps := 100
-
-	// Rapidly switch focus between components
-	for i := 0; i < numOps; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -179,37 +169,30 @@ func TestConcurrentFocusChanges(t *testing.T) {
 	wg.Wait()
 	time.Sleep(50 * time.Millisecond)
 
-	// One of them should be focused
-	if !comp1.focused && !comp2.focused {
+	if !comp1.IsFocused() && !comp2.IsFocused() {
 		t.Error("One component should be focused")
 	}
 }
 
-// TestStopWhileProcessing tests stopping TUI while operations are in progress
 func TestStopWhileProcessing(t *testing.T) {
-	term := &MockTerminal{}
+	term := &testTerminal{}
 	tui := NewTUI(term, false)
 	tui.Start()
 
 	time.Sleep(10 * time.Millisecond)
 
-	// Start many operations
 	for range 100 {
 		go tui.TriggerRender()
 		go tui.HandleInput("x")
 	}
 
-	// Stop immediately
 	time.Sleep(5 * time.Millisecond)
 	tui.Stop()
-
-	// Should not panic or deadlock
 	time.Sleep(50 * time.Millisecond)
 }
 
-// TestForceRenderConcurrent tests concurrent force renders
 func TestForceRenderConcurrent(t *testing.T) {
-	term := &MockTerminal{}
+	term := &testTerminal{}
 	tui := NewTUI(term, false)
 	tui.Start()
 	defer tui.Stop()
@@ -217,7 +200,7 @@ func TestForceRenderConcurrent(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -229,9 +212,8 @@ func TestForceRenderConcurrent(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
-// TestConcurrentContainerOperations tests concurrent container modifications
 func TestConcurrentContainerOperations(t *testing.T) {
-	term := &MockTerminal{}
+	term := &testTerminal{}
 	tui := NewTUI(term, false)
 	tui.Start()
 	defer tui.Stop()
@@ -239,35 +221,30 @@ func TestConcurrentContainerOperations(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	var wg sync.WaitGroup
-	numOps := 50
+	const numOps = 50
 
-	// Concurrent AddChild operations
-	for i := 0; i < numOps; i++ {
+	for range numOps {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			comp := &MockComponent{}
-			tui.AddChild(comp)
+			tui.AddChild(newLineComponent("test"))
 		}()
 	}
 
 	wg.Wait()
 	time.Sleep(50 * time.Millisecond)
 
-	// Should have added all components
 	if len(tui.GetChildren()) != numOps {
 		t.Errorf("Expected %d children, got %d", numOps, len(tui.GetChildren()))
 	}
 }
 
-// TestConcurrentContainerMixedOps tests mixed container operations
 func TestConcurrentContainerMixedOps(t *testing.T) {
-	term := &MockTerminal{}
+	term := &testTerminal{}
 	tui := NewTUI(term, false)
 
-	// Add some initial components before starting
-	for i := 0; i < 10; i++ {
-		tui.AddChild(&MockComponent{})
+	for range 10 {
+		tui.AddChild(newLineComponent("init"))
 	}
 
 	tui.Start()
@@ -276,26 +253,22 @@ func TestConcurrentContainerMixedOps(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	var wg sync.WaitGroup
-	numOps := 30
+	const numOps = 30
 
-	// Concurrent mixed operations
 	for i := range numOps {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
 			switch idx % 3 {
 			case 0:
-				// Add
-				tui.AddChild(&MockComponent{})
+				tui.AddChild(newLineComponent("added"))
 			case 1:
-				// Remove at index if exists
 				children := tui.GetChildren()
 				if len(children) > 0 {
 					tui.RemoveChildAt(0)
 				}
 			case 2:
-				// Insert
-				tui.InsertChildAt(0, &MockComponent{})
+				tui.InsertChildAt(0, newLineComponent("inserted"))
 			}
 		}(i)
 	}
@@ -303,26 +276,22 @@ func TestConcurrentContainerMixedOps(t *testing.T) {
 	wg.Wait()
 	time.Sleep(50 * time.Millisecond)
 
-	// Should not panic and have some children
-	children := tui.GetChildren()
-	if children == nil {
+	if children := tui.GetChildren(); children == nil {
 		t.Error("Children should not be nil")
 	}
 }
 
-// TestContainerOpsBeforeStart tests that container operations work before Start()
 func TestContainerOpsBeforeStart(t *testing.T) {
-	term := &MockTerminal{}
+	term := &testTerminal{}
 	tui := NewTUI(term, false)
 
-	// Add children before starting
-	comp1 := &MockComponent{}
-	comp2 := &MockComponent{}
+	comp1 := newLineComponent("a")
+	comp2 := newLineComponent("b")
 	tui.AddChild(comp1)
 	tui.AddChild(comp2)
 
 	if len(tui.GetChildren()) != 2 {
-		t.Errorf("Expected 2 children before start, got %d", len(tui.GetChildren()))
+		t.Fatalf("Expected 2 children before start, got %d", len(tui.GetChildren()))
 	}
 
 	tui.Start()
@@ -330,10 +299,7 @@ func TestContainerOpsBeforeStart(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	// Add more after starting
-	comp3 := &MockComponent{}
-	tui.AddChild(comp3)
-
+	tui.AddChild(newLineComponent("c"))
 	time.Sleep(10 * time.Millisecond)
 
 	if len(tui.GetChildren()) != 3 {
@@ -342,10 +308,10 @@ func TestContainerOpsBeforeStart(t *testing.T) {
 }
 
 type stopRaceTerminal struct {
-	writeStarted chan struct{}
-	allowWrite   chan struct{}
-	startedOnce  sync.Once
-	stopped      atomic.Bool
+	writeStarted  chan struct{}
+	allowWrite    chan struct{}
+	startedOnce   sync.Once
+	stopped       atomic.Bool
 	hideAfterStop atomic.Int32
 }
 
@@ -364,9 +330,9 @@ func (m *stopRaceTerminal) Write(data string) {
 		<-m.allowWrite
 	}
 }
-func (m *stopRaceTerminal) GetSize() (int, int)        { return 80, 24 }
+func (m *stopRaceTerminal) GetSize() (int, int)         { return 80, 24 }
 func (m *stopRaceTerminal) IsKittyProtocolActive() bool { return false }
-func (m *stopRaceTerminal) MoveBy(lines int)            {}
+func (m *stopRaceTerminal) MoveBy(lines int)              {}
 func (m *stopRaceTerminal) HideCursor() {
 	if m.stopped.Load() {
 		m.hideAfterStop.Add(1)
@@ -378,7 +344,6 @@ func (m *stopRaceTerminal) ClearFromCursor()      {}
 func (m *stopRaceTerminal) ClearScreen()          {}
 func (m *stopRaceTerminal) SetTitle(title string) {}
 
-// TestStopWaitsForRenderCompletion ensures terminal.Stop is called after in-flight render exits.
 func TestStopWaitsForRenderCompletion(t *testing.T) {
 	term := newStopRaceTerminal()
 	tui := NewTUI(term, false)
@@ -396,7 +361,6 @@ func TestStopWaitsForRenderCompletion(t *testing.T) {
 		close(done)
 	}()
 
-	// Release blocked write so render can complete and event loop can exit.
 	close(term.allowWrite)
 
 	select {

@@ -52,8 +52,7 @@ func (r *recordingTerminal) SetTitle(title string) {}
 func TestForceRenderClearsScreenAfterStateReset(t *testing.T) {
 	term := &recordingTerminal{}
 	tui := NewTUI(term, false)
-	comp := &MockComponent{}
-	tui.AddChild(comp)
+	tui.AddChild(&concurrencyLineComponent{lines: []string{"test"}})
 	tui.Start()
 	defer tui.Stop()
 

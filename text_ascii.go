@@ -11,6 +11,14 @@ func IsASCII(s string) bool {
 	if l == 0 {
 		return true
 	}
+	if l < 64 {
+		for i := range l {
+			if s[i] >= 0x80 {
+				return false
+			}
+		}
+		return true
+	}
 
 	addr := uint64(uintptr(unsafe.Pointer(unsafe.StringData(s))))
 	alignAddr := (addr + 63) &^ 63
@@ -41,7 +49,7 @@ func IsASCII(s string) bool {
 
 	ptr = unsafe.Add(ptr, align64)
 	tailLen := remaining & 63
-	for i := 0; i < tailLen; i++ {
+	for i := range tailLen {
 		if *(*byte)(unsafe.Add(ptr, i)) >= 0x80 {
 			return false
 		}
@@ -55,13 +63,19 @@ func isPrintableASCII(s string) bool {
 	if l == 0 {
 		return true
 	}
+	if l < 64 {
+		for i := range l {
+			b := s[i]
+			if b < 0x20 || b > 0x7e {
+				return false
+			}
+		}
+		return true
+	}
 
 	addr := uint64(uintptr(unsafe.Pointer(unsafe.StringData(s))))
 	alignAddr := (addr + 63) &^ 63
-	headLen := int(alignAddr - addr)
-	if headLen > l {
-		headLen = l
-	}
+	headLen := min(int(alignAddr-addr), l)
 
 	ptr := unsafe.Pointer(unsafe.StringData(s))
 
