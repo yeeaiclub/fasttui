@@ -85,8 +85,8 @@ func NewLoader(
 }
 
 func (l *Loader) Render(width int) []string {
-	l.textMu.RLock()
-	defer l.textMu.RUnlock()
+	l.textMu.Lock()
+	defer l.textMu.Unlock()
 	lines := l.Text.Render(width)
 	result := make([]string, 0, len(lines)+1)
 	result = append(result, "")
