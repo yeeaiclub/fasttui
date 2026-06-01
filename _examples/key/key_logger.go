@@ -3,13 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"github.com/yeeaiclub/fasttui"
 	"github.com/yeeaiclub/fasttui/keys"
-	"github.com/yeeaiclub/fasttui/terminal"
 )
 
 type KeyLogger struct {
@@ -37,9 +34,7 @@ func (k *KeyLogger) HandleInput(data string) {
 	charCodes := k.toCharCodes(data)
 	repr := k.toRepr(data)
 
-	// Don't create the full log line here - just store the raw data
-	// We'll format it in Render() where we know the terminal width
-	logLine := fmt.Sprintf("Hex: %s | Chars: [%s] | Repr: \"%s\"", hex, charCodes, repr)
+	logLine := fmt.Sprintf("Hex: %s | Chars: [%s] | Repr: %q", hex, charCodes, repr)
 
 	k.log = append(k.log, logLine)
 
@@ -47,7 +42,6 @@ func (k *KeyLogger) HandleInput(data string) {
 		k.log = k.log[1:]
 	}
 
-	// Request re-render to show the new log entry
 	k.tui.ForceRender()
 }
 
@@ -146,27 +140,3 @@ func (k *KeyLogger) padRight(s string, width int) string {
 	return s
 }
 
-func main() {
-	term := terminal.NewProcessTerminal()
-	tui := fasttui.NewTUI(term, true)
-	logger := NewKeyLogger(tui)
-
-	tui.AddChild(logger)
-	tui.SetFocus(logger)
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT)
-
-	go func() {
-		<-sigChan
-		tui.Stop()
-		fmt.Println("\nExiting...")
-		os.Exit(0)
-	}()
-
-	tui.Start()
-
-	// Keep the program running - the goroutine handles rendering
-	// Exit is handled by Ctrl+C or SIGINT
-	select {}
-}
