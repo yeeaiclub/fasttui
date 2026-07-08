@@ -134,6 +134,7 @@ func (t *TUI) eventLoop() {
 	}
 }
 
+// 强制刷新
 func (t *TUI) forceRender() {
 	t.previousLines = nil
 	t.previousWidth = -1
