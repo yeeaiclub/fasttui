@@ -849,12 +849,20 @@ func wrapLinePrintableASCII(line string, contentWidth int, cursorCol int, hasCur
 	start := 0
 	for start < len(line) {
 		end := wrapChunkEndAtWidth(line, start, contentWidth, 0)
+		isLast := end >= len(line)
 
 		lineHasCursor := false
 		cursorPos := 0
-		if hasCursor && cursorCol >= start && cursorCol <= end {
-			lineHasCursor = true
-			cursorPos = cursorCol - start
+		if hasCursor {
+			if isLast {
+				if cursorCol >= start && cursorCol <= len(line) {
+					lineHasCursor = true
+					cursorPos = cursorCol - start
+				}
+			} else if cursorCol >= start && cursorCol < end {
+				lineHasCursor = true
+				cursorPos = cursorCol - start
+			}
 		}
 
 		layoutLines = append(layoutLines, LayoutLine{
@@ -876,12 +884,20 @@ func wrapLineASCII(line string, contentWidth int, cursorCol int, hasCursor bool)
 	start := 0
 	for start < len(line) {
 		end := wrapChunkEndAtWidth(line, start, contentWidth, 3)
+		isLast := end >= len(line)
 
 		lineHasCursor := false
 		cursorPos := 0
-		if hasCursor && cursorCol >= start && cursorCol <= end {
-			lineHasCursor = true
-			cursorPos = cursorCol - start
+		if hasCursor {
+			if isLast {
+				if cursorCol >= start && cursorCol <= len(line) {
+					lineHasCursor = true
+					cursorPos = cursorCol - start
+				}
+			} else if cursorCol >= start && cursorCol < end {
+				lineHasCursor = true
+				cursorPos = cursorCol - start
+			}
 		}
 
 		layoutLines = append(layoutLines, LayoutLine{

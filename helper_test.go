@@ -71,6 +71,22 @@ func TestExtractCursorPosition(t *testing.T) {
 			wantCol:      0,
 			modifiedLine: "",
 		},
+		{
+			name:         "multiple cursor markers keeps first found position",
+			lines:        []string{"a" + CursorMarker + "b", "c" + CursorMarker + "d"},
+			height:       10,
+			wantRow:      1,
+			wantCol:      1,
+			modifiedLine: "cd",
+		},
+		{
+			name:         "multiple markers on same line removes all",
+			lines:        []string{"a" + CursorMarker + CursorMarker + "b"},
+			height:       10,
+			wantRow:      0,
+			wantCol:      1,
+			modifiedLine: "ab",
+		},
 	}
 
 	for _, tt := range tests {
@@ -86,6 +102,11 @@ func TestExtractCursorPosition(t *testing.T) {
 
 			if tt.modifiedLine != "" {
 				assert.Equal(t, tt.modifiedLine, lines[tt.wantRow], "line after extraction")
+			}
+
+			for i, line := range lines {
+				assert.NotContains(t, line, CursorMarker, "line %d should have all markers removed", i)
+				assert.NotContains(t, line, "i:c", "line %d should not leak marker fragment", i)
 			}
 		})
 	}
