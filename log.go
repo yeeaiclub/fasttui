@@ -6,30 +6,28 @@ import (
 	"strconv"
 	"strings"
 	"time"
-)
 
-// Logging Functions
+	"github.com/yeeaiclub/fasttui/internal/debug"
+)
 
 // GetCrashLogPath returns the path to the crash log file.
 func GetCrashLogPath() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = "."
-	}
-	return filepath.Join(homeDir, ".panda", "panda-crash.log")
+	return debug.CrashLogPath()
 }
 
 // WriteCrashLog writes crash data to the specified path.
 func WriteCrashLog(path string, data string) {
-	dir := filepath.Dir(path)
-	os.MkdirAll(dir, 0755)
-	os.WriteFile(path, []byte(data), 0644)
+	if path == "" || path == debug.CrashLogPath() {
+		debug.WriteCrashLog(data)
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	_ = os.WriteFile(path, []byte(data), 0o644)
 }
 
 // LogCrashInfo logs detailed crash information including terminal width,
 // line index, and all rendered lines.
 func LogCrashInfo(width int, lineIndex int, line string, newLines []string) {
-	crashLogPath := GetCrashLogPath()
 	var crashData strings.Builder
 	crashData.WriteString("Crash at ")
 	crashData.WriteString(time.Now().Format(time.RFC3339))
@@ -52,7 +50,7 @@ func LogCrashInfo(width int, lineIndex int, line string, newLines []string) {
 		crashData.WriteString(l)
 		crashData.WriteString("\n")
 	}
-	WriteCrashLog(crashLogPath, crashData.String())
+	debug.WriteCrashLog(crashData.String())
 }
 
 // BuildWidthExceedErrorMsg builds an error message for when a rendered line
@@ -74,53 +72,21 @@ func BuildWidthExceedErrorMsg(lineIndex int, lineWidth int, termWidth int, crash
 }
 
 // WriteDebugLog writes detailed debug information about the rendering process.
+// With FASTTUI_DEBUG=1 the render loop dumps automatically; this helper is for
+// explicit dumps.
 func WriteDebugLog(firstChanged, viewportTop, finalCursorRow, hardwareCursorRow,
 	renderEnd, cursorRow, cursorCol, height int, tCursorRow int, newLines, previousLines []string) {
-	debugDir := "/tmp/tui"
-	os.MkdirAll(debugDir, 0755)
-
-	timestamp := time.Now().UnixNano() / int64(time.Millisecond)
-	debugPath := filepath.Join(debugDir, "render-"+strconv.FormatInt(timestamp, 10)+".log")
-
-	var debugData strings.Builder
-	debugData.WriteString("firstChanged: ")
-	debugData.WriteString(strconv.Itoa(firstChanged))
-	debugData.WriteString("\nviewportTop: ")
-	debugData.WriteString(strconv.Itoa(viewportTop))
-	debugData.WriteString("\ncursorRow: ")
-	debugData.WriteString(strconv.Itoa(tCursorRow))
-	debugData.WriteString("\nheight: ")
-	debugData.WriteString(strconv.Itoa(height))
-	debugData.WriteString("\nhardwareCursorRow: ")
-	debugData.WriteString(strconv.Itoa(hardwareCursorRow))
-	debugData.WriteString("\nrenderEnd: ")
-	debugData.WriteString(strconv.Itoa(renderEnd))
-	debugData.WriteString("\nfinalCursorRow: ")
-	debugData.WriteString(strconv.Itoa(finalCursorRow))
-	debugData.WriteString("\ncursorPos: row=")
-	debugData.WriteString(strconv.Itoa(cursorRow))
-	debugData.WriteString(" col=")
-	debugData.WriteString(strconv.Itoa(cursorCol))
-	debugData.WriteString("\nnewLines.length: ")
-	debugData.WriteString(strconv.Itoa(len(newLines)))
-	debugData.WriteString("\npreviousLines.length: ")
-	debugData.WriteString(strconv.Itoa(len(previousLines)))
-	debugData.WriteString("\n\n=== newLines ===\n")
-	for i, line := range newLines {
-		debugData.WriteString("[")
-		debugData.WriteString(strconv.Itoa(i))
-		debugData.WriteString("] ")
-		debugData.WriteString(line)
-		debugData.WriteString("\n")
-	}
-	debugData.WriteString("\n=== previousLines ===\n")
-	for i, line := range previousLines {
-		debugData.WriteString("[")
-		debugData.WriteString(strconv.Itoa(i))
-		debugData.WriteString("] ")
-		debugData.WriteString(line)
-		debugData.WriteString("\n")
-	}
-
-	os.WriteFile(debugPath, []byte(debugData.String()), 0644)
+	debug.WriteRenderDump(debug.RenderDump{
+		FirstChanged:      firstChanged,
+		ViewportTop:       viewportTop,
+		CursorRow:         tCursorRow,
+		Height:            height,
+		HardwareCursorRow: hardwareCursorRow,
+		RenderEnd:         renderEnd,
+		FinalCursorRow:    finalCursorRow,
+		CursorPosRow:      cursorRow,
+		CursorPosCol:      cursorCol,
+		NewLines:          newLines,
+		PreviousLines:     previousLines,
+	})
 }
