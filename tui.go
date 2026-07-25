@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/yeeaiclub/fasttui/internal/debug"
 	"github.com/yeeaiclub/fasttui/keys"
 )
 
@@ -44,6 +45,8 @@ type TUI struct {
 
 	clearOnShrink bool
 
+	pendingFullReason string
+
 	eventLoopDone chan struct{}
 }
 
@@ -58,6 +61,13 @@ func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
 	t.eventLoopDone = make(chan struct{})
 	close(t.eventLoopDone)
 	return t
+}
+
+// SetLogDir sets the directory for debug and crash logs (fasttui-debug.log,
+// fasttui-crash.log). Call before Start. Empty restores the default
+// (FASTTUI_LOG_DIR or ~/.fasttui).
+func (t *TUI) SetLogDir(dir string) {
+	debug.SetLogDir(dir)
 }
 
 func (t *TUI) Start() {
@@ -136,6 +146,7 @@ func (t *TUI) eventLoop() {
 
 // 强制刷新
 func (t *TUI) forceRender() {
+	t.pendingFullReason = "force render"
 	t.previousLines = nil
 	t.previousWidth = -1
 	t.previousHeight = -1
@@ -169,18 +180,37 @@ func (t *TUI) doRender() {
 	newLines = appendSegmentResetCodes(newLines)
 	fullRender := t.getFullRender(newLines, height, row, col, width)
 
+	prevLineCount := 0
+	if t.previousLines != nil {
+		prevLineCount = len(t.previousLines)
+	}
+
 	// Any terminal dimension change invalidates incremental drawing: cursor row and
 	// viewport math assume the previous size. Window drags often change height only
 	// (especially on Windows, where resize signals may not run between frames).
 	terminalSizeChanged := (t.previousWidth != 0 && t.previousWidth != width) ||
 		(t.previousHeight != 0 && t.previousHeight != height)
+
+	if t.pendingFullReason != "" {
+		reason := t.pendingFullReason
+		t.pendingFullReason = ""
+		t.fullRender(fullRender, true, reason, prevLineCount, len(newLines), height)
+		return
+	}
+
 	if t.previousLines == nil && !terminalSizeChanged {
-		fullRender.Render(false)
+		t.fullRender(fullRender, false, "first render", prevLineCount, len(newLines), height)
 		return
 	}
 
 	if terminalSizeChanged {
-		fullRender.Render(true)
+		reason := "terminal size changed"
+		if t.previousWidth != 0 && t.previousWidth != width {
+			reason = fmt.Sprintf("terminal width changed (%d -> %d)", t.previousWidth, width)
+		} else if t.previousHeight != 0 && t.previousHeight != height {
+			reason = fmt.Sprintf("terminal height changed (%d -> %d)", t.previousHeight, height)
+		}
+		t.fullRender(fullRender, true, reason, prevLineCount, len(newLines), height)
 		return
 	}
 
@@ -229,7 +259,9 @@ func (t *TUI) doRender() {
 	// and force false full re-renders.
 	previousContentViewportTop := max(0, len(t.previousLines)-height)
 	if firstChangedIdx < previousContentViewportTop {
-		fullRender.Render(true)
+		t.fullRender(fullRender, true,
+			fmt.Sprintf("firstChanged < viewportTop (%d < %d)", firstChangedIdx, previousContentViewportTop),
+			prevLineCount, len(newLines), height)
 		return
 	}
 
@@ -239,7 +271,7 @@ func (t *TUI) doRender() {
 	// - there was previous content (firstChanged > 0)
 	// This means we should start rendering from the line after the previous content ends
 	appendStart := isAppendedLines && firstChangedIdx == len(t.previousLines) && firstChangedIdx > 0
-	finalCursorRow := t.renderChangedLines(width, height, firstChangedIdx, lastChangedIdx, newLines, appendStart)
+	finalCursorRow := t.renderChangedLines(width, height, firstChangedIdx, lastChangedIdx, newLines, appendStart, row, col)
 
 	// Track cursor position for next render
 	// cursorRow tracks end of content (for viewport calculation)
@@ -258,7 +290,14 @@ func (t *TUI) doRender() {
 	t.previousHeight = height
 }
 
-func (t *TUI) renderChangedLines(width, height, firstChangedIdx, lastChangedIdx int, newLines []string, appendStart bool) int {
+// fullRender performs a full paint and records debug redraw metadata.
+func (t *TUI) fullRender(r FullRenderer, clear bool, reason string, prevLines, newLines, height int) {
+	debug.LogRedraw(reason, prevLines, newLines, height)
+	t.fullRedrawCount++
+	r.Render(clear)
+}
+
+func (t *TUI) renderChangedLines(width, height, firstChangedIdx, lastChangedIdx int, newLines []string, appendStart bool, cursorPosRow, cursorPosCol int) int {
 	viewportTop := max(0, t.maxLinesRendered-height)
 	hardwareCursorRow := t.hardwareCursorRow
 	prevViewportTop := t.previousViewportTop
@@ -367,6 +406,23 @@ func (t *TUI) renderChangedLines(width, height, firstChangedIdx, lastChangedIdx 
 
 	buffer.WriteString(SyncOutputEnd) // End synchronized output
 
+	if debug.RenderDumpEnabled() {
+		debug.WriteRenderDump(debug.RenderDump{
+			FirstChanged:      firstChangedIdx,
+			ViewportTop:       viewportTop,
+			CursorRow:         t.cursorRow,
+			Height:            height,
+			HardwareCursorRow: hardwareCursorRow,
+			RenderEnd:         renderEnd,
+			FinalCursorRow:    finalCursorRow,
+			CursorPosRow:      cursorPosRow,
+			CursorPosCol:      cursorPosCol,
+			NewLines:          newLines,
+			PreviousLines:     t.previousLines,
+			Buffer:            buffer.String(),
+		})
+	}
+
 	// Write entire buffer at once
 	t.terminal.Write(buffer.String())
 	return finalCursorRow
@@ -391,7 +447,9 @@ func (t *TUI) clearTrailingLines(cursorOffset int, extraLines int, height int, f
 
 	// Clear extra lines without scrolling
 	if extraLines > height {
-		fullRender.Render(true)
+		t.fullRender(fullRender, true,
+			fmt.Sprintf("extraLines > height (%d > %d)", extraLines, height),
+			len(t.previousLines), len(fullRender.newLines), height)
 		return true
 	}
 

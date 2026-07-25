@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/yeeaiclub/fasttui/internal/debug"
 )
 
 var kittyResponsePattern = regexp.MustCompile(`^\x1b\[\?(\d+)u$`)
@@ -268,4 +270,5 @@ func (p *ProcessTerminal) SetTitle(title string) {
 
 func (p *ProcessTerminal) print(s string) {
 	_, _ = os.Stdout.WriteString(s)
+	debug.AppendWrite(s)
 }
