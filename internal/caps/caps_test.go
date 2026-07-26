@@ -167,6 +167,27 @@ func TestNewCOLORTERM(t *testing.T) {
 	}
 }
 
+func TestEnableVHSRecordDisablesKitty(t *testing.T) {
+	t.Setenv("VHS_RECORD", "1")
+	d := New()
+	d.caps.TrueColor = false
+	d.Feed("\x1b[?7u")
+	d.Feed("\x1b[?1;2c")
+	if !d.Caps().KittyKeyboard {
+		t.Fatal("KittyKeyboard should be true before Enable")
+	}
+	enable := d.Enable()
+	if bytes.Contains(enable, []byte(enableKittyKeyboard)) {
+		t.Fatalf("Enable under VHS_RECORD must not push Kitty: %q", enable)
+	}
+	if d.Caps().KittyKeyboard {
+		t.Fatal("Caps.KittyKeyboard should be false after Enable under VHS_RECORD")
+	}
+	if !bytes.Equal(enable, []byte(enableBracketedPaste)) {
+		t.Fatalf("Enable() = %q, want bracketed paste only", enable)
+	}
+}
+
 func TestFeed(t *testing.T) {
 	tests := []struct {
 		name      string

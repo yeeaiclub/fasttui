@@ -14,6 +14,7 @@ func (m *mockEditorTerm) Start(func(string), func()) error { return nil }
 func (m *mockEditorTerm) Stop()                            {}
 func (m *mockEditorTerm) Write(string)                     {}
 func (m *mockEditorTerm) IsKittyProtocolActive() bool      { return false }
+func (m *mockEditorTerm) SupportsSyncOutput() bool         { return false }
 func (m *mockEditorTerm) MoveBy(int)                       {}
 func (m *mockEditorTerm) HideCursor()                      {}
 func (m *mockEditorTerm) ShowCursor()                      {}

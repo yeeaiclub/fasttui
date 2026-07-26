@@ -38,6 +38,10 @@ func (r *recordingTerminal) IsKittyProtocolActive() bool {
 	return false
 }
 
+func (r *recordingTerminal) SupportsSyncOutput() bool {
+	return false
+}
+
 func (r *recordingTerminal) MoveBy(lines int)      {}
 func (r *recordingTerminal) HideCursor()         {}
 func (r *recordingTerminal) ShowCursor()         {}

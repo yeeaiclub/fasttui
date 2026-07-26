@@ -2,42 +2,45 @@ package terminal
 
 import (
 	"os"
-	"regexp"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/yeeaiclub/fasttui/internal/caps"
 	"github.com/yeeaiclub/fasttui/internal/debug"
+	"github.com/yeeaiclub/fasttui/keys"
 )
 
-var kittyResponsePattern = regexp.MustCompile(`^\x1b\[\?(\d+)u$`)
+// Default probe window for VT capability queries (matches libvaxis).
+const probeTimeout = time.Second
 
 type ProcessTerminal struct {
-	buffer                *StdinBuffer
-	rawState              *rawModeState
-	stdinFD               int
-	stdoutFD              int
-	isKittyProtocolActive bool
-	inputHandler          func(data string)
-	stdinDataBuffer       func(data []byte)
-	wasRaw                bool
-	resizeHandler         func()
-	resizeSignalChan      chan os.Signal
-	stopChan              chan struct{}
-	stopOnce              sync.Once
-	stopResizeSignal      func()
+	buffer           *StdinBuffer
+	rawState         *rawModeState
+	stdinFD          int
+	stdoutFD         int
+	detector         *caps.Detector
+	inputHandler     func(data string)
+	stdinDataBuffer  func(data []byte)
+	wasRaw           bool
+	resizeHandler    func()
+	resizeSignalChan chan os.Signal
+	stopChan         chan struct{}
+	stopOnce         sync.Once
+	stopResizeSignal func()
+
+	probeDoneOnce sync.Once
+	probeDoneCh   chan struct{}
 }
 
 func NewProcessTerminal() *ProcessTerminal {
 	buffer := NewStdinBuffer()
 	return &ProcessTerminal{
-		buffer:                buffer,
-		stdinFD:               int(os.Stdin.Fd()),
-		stdoutFD:              int(os.Stdout.Fd()),
-		isKittyProtocolActive: false,
-		wasRaw:                false,
-		resizeSignalChan:      make(chan os.Signal, 1),
-		stopChan:              make(chan struct{}),
+		buffer:           buffer,
+		stdinFD:          int(os.Stdin.Fd()),
+		stdoutFD:         int(os.Stdout.Fd()),
+		resizeSignalChan: make(chan os.Signal, 1),
+		stopChan:         make(chan struct{}),
 	}
 }
 
@@ -49,8 +52,23 @@ func (p *ProcessTerminal) GetSize() (int, int) {
 	return w, h
 }
 
+// Caps returns features discovered during Start's capability probe.
+// Before Start (or if probing never ran), returns the zero value.
+func (p *ProcessTerminal) Caps() caps.Caps {
+	if p.detector == nil {
+		return caps.Caps{}
+	}
+	return p.detector.Caps()
+}
+
+// IsKittyProtocolActive reports whether Kitty keyboard was detected and enabled.
 func (p *ProcessTerminal) IsKittyProtocolActive() bool {
-	return p.isKittyProtocolActive
+	return p.Caps().KittyKeyboard
+}
+
+// SupportsSyncOutput reports whether mode 2026 was confirmed via DECRQM.
+func (p *ProcessTerminal) SupportsSyncOutput() bool {
+	return p.Caps().SyncOutput
 }
 
 func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) error {
@@ -64,18 +82,15 @@ func (p *ProcessTerminal) Start(onInput func(data string), onResize func()) erro
 	}
 	p.rawState = rawState
 
-	// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
-	p.print("\x1b[?2004h")
+	p.setupStdinBuffer()
+	go p.readInputLoop()
 
-	// Query and enable Kitty keyboard protocol
-	p.queryAndEnableKittyProtocol()
+	p.probeAndEnable()
 
 	// Set up resize signal handling
 	p.stopResizeSignal = registerResizeSignal(p)
 	go p.handleResizeSignal()
 
-	// Start reading input in background
-	go p.readInputLoop()
 	return nil
 }
 
@@ -121,28 +136,21 @@ func (p *ProcessTerminal) handleResizeSignal() {
 	}
 }
 
-// setupStdinBuffer sets up StdinBuffer to split batched input into individual sequences.
-// This ensures components receive single events, making matchesKey/isKeyRelease work correctly.
-//
-// Also watches for Kitty protocol response and enables it when detected.
+// setupStdinBuffer splits batched input into individual sequences and feeds
+// capability-probe replies into detector until probing finishes.
 func (p *ProcessTerminal) setupStdinBuffer() {
 	p.buffer = NewStdinBuffer()
+	p.detector = caps.New()
+	p.probeDoneCh = make(chan struct{})
+	p.probeDoneOnce = sync.Once{}
 
-	// Forward individual sequences to the input handler
 	p.buffer.OnData = func(seq string) {
-		// Check for Kitty protocol response (only if not already enabled)
-		if !p.isKittyProtocolActive {
-			match := kittyResponsePattern.FindStringSubmatch(seq)
-			if len(match) > 1 {
-				p.isKittyProtocolActive = true
-
-				// Enable Kitty keyboard protocol (push flags)
-				// Flag 1 = disambiguate escape codes
-				// Flag 2 = report event types (press/repeat/release)
-				// Flag 4 = report alternate keys (shifted key, base layout key)
-				// Base layout key enables shortcuts to work with non-Latin keyboard layouts
-				p.print("\x1b[>7u")
-				return // Don't forward protocol response to TUI
+		if p.detector != nil && !p.detector.Done() {
+			if p.detector.Feed(seq) {
+				if p.detector.Done() {
+					p.signalProbeDone()
+				}
+				return // probe response — do not forward to the app
 			}
 		}
 		if p.inputHandler != nil {
@@ -157,7 +165,6 @@ func (p *ProcessTerminal) setupStdinBuffer() {
 		}
 	}
 
-	// Handler that pipes stdin data through the buffer
 	p.stdinDataBuffer = func(data []byte) {
 		if p.buffer != nil {
 			p.buffer.Process(data)
@@ -165,15 +172,26 @@ func (p *ProcessTerminal) setupStdinBuffer() {
 	}
 }
 
-// queryAndEnableKittyProtocol queries terminal for Kitty keyboard protocol support and enables if available.
-//
-// Sends CSI ? u to query current flags. If terminal responds with CSI ? <flags> u,
-// it supports the protocol and we enable it with CSI > 7 u.
-//
-// The response is detected in setupStdinBuffer's data handler.
-func (p *ProcessTerminal) queryAndEnableKittyProtocol() {
-	p.setupStdinBuffer()
-	p.print("\x1b[?u")
+// probeAndEnable writes VT queries, waits for Primary DA (or timeout), then
+// enables detected features. Reader must already be running.
+func (p *ProcessTerminal) probeAndEnable() {
+	p.print(string(p.detector.Query()))
+
+	select {
+	case <-p.probeDoneCh:
+	case <-time.After(probeTimeout):
+		p.detector.Complete()
+		p.signalProbeDone()
+	}
+
+	p.print(string(p.detector.Enable()))
+	keys.SetKittyProtocolActive(p.detector.Caps().KittyKeyboard)
+}
+
+func (p *ProcessTerminal) signalProbeDone() {
+	p.probeDoneOnce.Do(func() {
+		close(p.probeDoneCh)
+	})
 }
 
 func (p *ProcessTerminal) Stop() {
@@ -181,14 +199,12 @@ func (p *ProcessTerminal) Stop() {
 		// Signal goroutines to stop
 		close(p.stopChan)
 
-		// Disable bracketed paste mode
-		p.print("\x1b[?2004l")
-
-		// Disable Kitty keyboard protocol (pop the flags we pushed) - only if we enabled it
-		if p.isKittyProtocolActive {
-			p.print("\x1b[<u")
-			p.isKittyProtocolActive = false
+		if p.detector != nil {
+			p.print(string(p.detector.Disable()))
+		} else {
+			p.print("\x1b[?2004l")
 		}
+		keys.SetKittyProtocolActive(false)
 
 		// Show cursor (ensure it's visible after exit)
 		p.print("\x1b[?25h")

@@ -150,9 +150,13 @@ func (d *Detector) Caps() Caps {
 // SyncOutput and TrueColor / KittyGraphics are capability flags only —
 // synchronized output is bracketed per frame by the renderer, and color /
 // graphics need no mode switch here.
+//
+// Before building the sequence, Enable applies environment overrides
+// (mirroring libvaxis): VHS_RECORD disables Kitty keyboard.
 func (d *Detector) Enable() []byte {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.applyEnvOverridesLocked()
 	var b strings.Builder
 	if d.caps.KittyKeyboard {
 		b.WriteString(enableKittyKeyboard)
@@ -163,6 +167,14 @@ func (d *Detector) Enable() []byte {
 	// Always enable; Caps.BracketedPaste still reflects DECRQM confirmation.
 	b.WriteString(enableBracketedPaste)
 	return []byte(b.String())
+}
+
+// applyEnvOverridesLocked mutates Caps for known broken or recording hosts.
+// Caller must hold d.mu.
+func (d *Detector) applyEnvOverridesLocked() {
+	if os.Getenv("VHS_RECORD") != "" {
+		d.caps.KittyKeyboard = false
+	}
 }
 
 // Disable returns sequences that reverse Enable for features that were on.
