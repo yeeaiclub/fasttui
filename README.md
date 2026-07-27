@@ -106,7 +106,7 @@ if err != nil {
 ### Where themes are loaded from
 
 1. **Built-in** – themes shipped under `style/theme` (e.g. `dark.json`, `light.json`, `theme/defaults/*.json`) are **embedded** and resolved first by name (filename without `.json`).
-2. **User themes** – `<config-dir>/fasttui/themes/<name>.json`. On most systems `<config-dir>` is `$XDG_CONFIG_HOME` or OS user config. Override the directory with **`FASTTUI_THEMES_DIR`**.
+2. **User themes** – `~/.config/fasttui/themes/<name>.json` (or `$XDG_CONFIG_HOME/fasttui/themes/` when set). Override the directory with **`FASTTUI_THEMES_DIR`**.
 
 **`ListThemeNames()`** returns all built-in names plus any `*.json` in the user themes directory (sorted, de-duplicated).
 

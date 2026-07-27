@@ -9,15 +9,23 @@ import (
 )
 
 // ThemesDir returns the directory for user-defined themes (override with FASTTUI_THEMES_DIR).
+// Default: $XDG_CONFIG_HOME/fasttui/themes, or ~/.config/fasttui/themes when unset.
 func ThemesDir() string {
 	if d := os.Getenv("FASTTUI_THEMES_DIR"); d != "" {
 		return d
 	}
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		dir = "."
+	return filepath.Join(configDir(), "fasttui", "themes")
+}
+
+func configDir() string {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return d
 	}
-	return filepath.Join(dir, "fasttui", "themes")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "."
+	}
+	return filepath.Join(home, ".config")
 }
 
 // LoadThemeFile loads a theme by name from embedded builtins first, then ThemesDir.
