@@ -11,7 +11,7 @@ import (
 
 func TestExamplesBuild(t *testing.T) {
 	root := moduleRoot(t)
-	examples := []string{"chat", "input", "key", "select"}
+	examples := []string{"chat", "input", "key", "select", "orb"}
 
 	for _, name := range examples {
 		t.Run(name, func(t *testing.T) {

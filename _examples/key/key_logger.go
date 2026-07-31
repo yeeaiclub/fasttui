@@ -16,21 +16,22 @@ type KeyLogger struct {
 	log      []string
 	maxLines int
 	tui      *fasttui.TUI
+	quit     func()
 }
 
-func NewKeyLogger(tui *fasttui.TUI) *KeyLogger {
+func NewKeyLogger(tui *fasttui.TUI, quit func()) *KeyLogger {
 	return &KeyLogger{
 		log:      make([]string, 0),
 		maxLines: 20,
 		tui:      tui,
+		quit:     quit,
 	}
 }
 
 func (k *KeyLogger) HandleInput(data string) {
 	if keys.MatchesKey(data, "ctrl+c") {
-		k.tui.Stop()
-		fmt.Println("\nExiting...")
-		os.Exit(0)
+		k.quit()
+		return
 	}
 
 	hex := k.toHex(data)
@@ -149,24 +150,26 @@ func (k *KeyLogger) padRight(s string, width int) string {
 func main() {
 	term := terminal.NewProcessTerminal()
 	tui := fasttui.NewTUI(term, true)
-	logger := NewKeyLogger(tui)
+
+	done := make(chan struct{})
+	quit := func() {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
+	logger := NewKeyLogger(tui, quit)
 
 	tui.AddChild(logger)
 	tui.SetFocus(logger)
+	tui.Start()
+	defer tui.Stop()
 
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT)
-
-	go func() {
-		<-sigChan
-		tui.Stop()
-		fmt.Println("\nExiting...")
-		os.Exit(0)
-	}()
-
-	tui.Start()
-
-	// Keep the program running - the goroutine handles rendering
-	// Exit is handled by Ctrl+C or SIGINT
-	select {}
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case <-sigChan:
+	case <-done:
+	}
 }

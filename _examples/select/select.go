@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/yeeaiclub/fasttui"
 	"github.com/yeeaiclub/fasttui/components"
@@ -43,6 +45,17 @@ func main() {
 	term := terminal.NewProcessTerminal()
 	tui := fasttui.NewTUI(term, true)
 
+	done := make(chan struct{})
+	var selected *components.SelectItem
+	var cancelled bool
+	quit := func() {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
+
 	// Add title text
 	titleText := components.NewText(
 		"Git Command Selector",
@@ -60,17 +73,15 @@ func main() {
 	// Create select list
 	selectList := components.NewSelectList(items, 8, components.WithSelectListTheme(theme))
 
-	// Set up callbacks
+	// Set up callbacks — signal main instead of calling Stop from the event loop.
 	selectList.SetOnSelect(func(item components.SelectItem) {
-		tui.Stop()
-		fmt.Printf("\nYou selected: %s (%s)\n", item.Label, item.Value)
-		os.Exit(0)
+		selected = &item
+		quit()
 	})
 
 	selectList.SetOnCancel(func() {
-		tui.Stop()
-		fmt.Println("\nSelection cancelled")
-		os.Exit(0)
+		cancelled = true
+		quit()
 	})
 
 	selectList.SetOnSelectionChange(func(item components.SelectItem) {
@@ -85,12 +96,22 @@ func main() {
 	tui.AddChild(components.NewDynamicBorder(components.WithBorderColor(func(s string) string { return s })))
 
 	// Add help text at bottom
-	helpText := components.NewText("↑/↓: Navigate | Enter: Select | Esc: Cancel", 1, 0)
+	helpText := components.NewText("↑/↓: Navigate | Enter: Select | Esc/Ctrl+C: Cancel", 1, 0)
 	tui.AddChild(helpText)
 
-	// Start TUI
 	tui.Start()
+	defer tui.Stop()
 
-	// Keep running
-	select {}
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	select {
+	case <-sigChan:
+	case <-done:
+	}
+
+	if selected != nil {
+		fmt.Printf("\nYou selected: %s (%s)\n", selected.Label, selected.Value)
+	} else if cancelled {
+		fmt.Println("\nSelection cancelled")
+	}
 }

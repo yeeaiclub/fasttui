@@ -15,20 +15,32 @@ func main() {
 	tui := fasttui.NewTUI(term, true)
 	tui.AddChild(components.NewDynamicBorder(components.WithBorderColor(func(s string) string { return s })))
 
+	done := make(chan struct{})
+	quit := func() {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
+
 	input := components.NewInput()
 	input.SetOnSubmit(func(value string) {
 		// fmt.Printf("Submitted: %q\n", value)
 	})
-	input.SetOnEscape(func() {
-		// fmt.Println("Escape pressed")
-	})
+	// Input maps Escape and Ctrl+C to this callback (raw mode: no SIGINT).
+	input.SetOnEscape(quit)
 	tui.AddChild(input)
 	tui.SetFocus(input)
 	tui.AddChild(components.NewDynamicBorder(components.WithBorderColor(func(s string) string { return s })))
 
 	tui.Start()
+	defer tui.Stop()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	<-sigChan
+	select {
+	case <-sigChan:
+	case <-done:
+	}
 }
