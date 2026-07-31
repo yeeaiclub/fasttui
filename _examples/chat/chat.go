@@ -23,6 +23,7 @@ type ChatApp struct {
 	selector       *ExtensionSelectorComponent
 	editor         *components.Editor
 	footer         *FooterComponent
+	done           chan struct{}
 }
 
 func NewChatApp() *ChatApp {
@@ -33,6 +34,7 @@ func NewChatApp() *ChatApp {
 		tui:   tui,
 		term:  term,
 		theme: CreateDefaultMarkdownTheme(),
+		done:  make(chan struct{}),
 	}
 }
 
@@ -232,14 +234,13 @@ func (app *ChatApp) setupEditor() {
 	app.editor.SetAutocomplete(provider, selectTheme, 8)
 
 	app.editor.OnCancel = func() {
-		// Double Ctrl+C to exit
+		// Double Ctrl+C to exit. Do not call tui.Stop() here — it runs on the
+		// event loop; signal main instead so Stop can restore the terminal.
 		now := time.Now()
 		if app.cancelCount > 0 && now.Sub(app.lastCancelTime) < 2*time.Second {
-			// Second Ctrl+C within 2 seconds - exit gracefully
-			app.exit()
+			app.requestExit()
 			return
 		}
-		// First Ctrl+C or timeout - show hint and reset
 		app.cancelCount = 1
 		app.lastCancelTime = now
 	}
@@ -252,26 +253,31 @@ func (app *ChatApp) setupFooter() {
 	app.tui.AddChild(app.footer)
 }
 
-func (app *ChatApp) exit() {
-	app.tui.Stop()
-	// Give terminal time to fully restore state
-	time.Sleep(200 * time.Millisecond)
-	os.Exit(0)
+func (app *ChatApp) requestExit() {
+	select {
+	case <-app.done:
+	default:
+		close(app.done)
+	}
 }
 
 func (app *ChatApp) Run() {
 	welcomeText := components.NewText(bold("Welcome to Simple Chat!"), 1, 1)
-	instructionsText := components.NewText("Type your messages below. Commands: /delete (remove last message), /clear (clear all messages)", 1, 0)
+	instructionsText := components.NewText("Type your messages below. Commands: /delete (remove last message), /clear (clear all messages). Press Ctrl+C twice to quit.", 1, 0)
 
 	app.tui.AddChild(welcomeText)
 	app.tui.AddChild(instructionsText)
 	app.setupEditor()
 	app.setupFooter()
 	app.tui.Start()
+	defer app.tui.Stop()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	<-sigChan
+	select {
+	case <-sigChan:
+	case <-app.done:
+	}
 }
 
 func main() {

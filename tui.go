@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/yeeaiclub/fasttui/internal/debug"
@@ -39,6 +40,7 @@ type TUI struct {
 	showHardwareCursor bool
 
 	focusedComponent Component
+	onInterrupt      func()
 
 	cellSizeQueryPending bool
 	inputBuffer          strings.Builder
@@ -47,7 +49,9 @@ type TUI struct {
 
 	pendingFullReason string
 
-	eventLoopDone chan struct{}
+	eventLoopDone   chan struct{}
+	handlingEvent   atomic.Bool
+	terminalStopOnce sync.Once
 }
 
 func NewTUI(terminal Terminal, showHardwareCursor bool) *TUI {
@@ -77,12 +81,24 @@ func (t *TUI) Start() {
 }
 
 func (t *TUI) Stop() {
-	if !t.stopped.CompareAndSwap(false, true) {
+	fromEvent := t.handlingEvent.Load()
+	if t.stopped.CompareAndSwap(false, true) {
+		close(t.stopChan)
+	}
+	// Handlers run on the event-loop goroutine. Waiting for eventLoopDone
+	// here would deadlock; restore the terminal asynchronously instead.
+	if fromEvent {
+		go t.waitAndRestoreTerminal()
 		return
 	}
-	close(t.stopChan)
+	t.waitAndRestoreTerminal()
+}
+
+func (t *TUI) waitAndRestoreTerminal() {
 	<-t.eventLoopDone
-	t.terminal.Stop()
+	t.terminalStopOnce.Do(func() {
+		t.terminal.Stop()
+	})
 }
 
 func (t *TUI) TriggerRender() {
@@ -115,6 +131,7 @@ func (t *TUI) eventLoop() {
 			return
 
 		case ev := <-t.eventChan:
+			t.handlingEvent.Store(true)
 			switch ev.kind {
 			case eventRender:
 				pendingRender = true
@@ -130,6 +147,7 @@ func (t *TUI) eventLoop() {
 			case eventQuery:
 				t.handleQueryRequest(ev)
 			}
+			t.handlingEvent.Store(false)
 		}
 
 		if pendingRender {
@@ -594,6 +612,14 @@ func (t *TUI) HandleInput(data string) {
 	}
 }
 
+// SetOnInterrupt registers a handler for Ctrl+C when no component is focused.
+// Raw mode disables ISIG, so Ctrl+C arrives as input (\x03) rather than SIGINT;
+// use this (or a focused component's own handler) instead of signal.Notify for
+// interactive quit. External signals (kill -INT/-TERM) still work via os/signal.
+func (t *TUI) SetOnInterrupt(fn func()) {
+	t.onInterrupt = fn
+}
+
 func (t *TUI) handleInput(data string) {
 	if t.cellSizeQueryPending {
 		t.inputBuffer.WriteString(data)
@@ -609,6 +635,12 @@ func (t *TUI) handleInput(data string) {
 			return
 		}
 		t.focusedComponent.HandleInput(data)
+		return
+	}
+
+	// No focus: Ctrl+C is not turned into SIGINT under raw mode.
+	if t.onInterrupt != nil && keys.MatchesKey(data, "ctrl+c") {
+		t.onInterrupt()
 	}
 }
 
