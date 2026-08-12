@@ -21,6 +21,7 @@ func (t *sizedRecordingTerminal) Stop()                              {}
 func (t *sizedRecordingTerminal) Write(data string)                { t.written.WriteString(data) }
 func (t *sizedRecordingTerminal) GetSize() (int, int)              { return t.width, t.height }
 func (t *sizedRecordingTerminal) IsKittyProtocolActive() bool      { return false }
+func (t *sizedRecordingTerminal) SupportsSyncOutput() bool         { return false }
 func (t *sizedRecordingTerminal) MoveBy(int)                       {}
 func (t *sizedRecordingTerminal) HideCursor()                      {}
 func (t *sizedRecordingTerminal) ShowCursor()                      {}

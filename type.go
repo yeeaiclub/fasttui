@@ -18,6 +18,7 @@ type Terminal interface {
 	Write(data string)
 	GetSize() (int, int)
 	IsKittyProtocolActive() bool
+	SupportsSyncOutput() bool
 	MoveBy(lines int)
 	HideCursor()
 	ShowCursor()

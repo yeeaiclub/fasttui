@@ -329,7 +329,7 @@ func (t *TUI) renderChangedLines(width, height, firstChangedIdx, lastChangedIdx 
 	// Render from first changed line to end
 	// Build buffer with all updates wrapped in synchronized output
 	var buffer strings.Builder
-	buffer.WriteString(SyncOutputBegin) // Begin synchronized output
+	t.writeSyncBegin(&buffer)
 
 	// Calculate the bottom row index of the previous viewport
 	// Used to determine if scrolling is needed when moving to a target row
@@ -422,7 +422,7 @@ func (t *TUI) renderChangedLines(width, height, firstChangedIdx, lastChangedIdx 
 		buffer.WriteString("A")
 	}
 
-	buffer.WriteString(SyncOutputEnd) // End synchronized output
+	t.writeSyncEnd(&buffer)
 
 	if debug.RenderDumpEnabled() {
 		debug.WriteRenderDump(debug.RenderDump{
@@ -449,7 +449,7 @@ func (t *TUI) renderChangedLines(width, height, firstChangedIdx, lastChangedIdx 
 // clearTrailingLines clears extra lines in terminal to prevent content scrolling
 func (t *TUI) clearTrailingLines(cursorOffset int, extraLines int, height int, fullRender FullRenderer) bool {
 	var buffer strings.Builder
-	buffer.WriteString(SyncOutputBegin)
+	t.writeSyncBegin(&buffer)
 
 	// Move to end of new content (clamp to 0 for empty content)
 	if cursorOffset > 0 {
@@ -486,7 +486,7 @@ func (t *TUI) clearTrailingLines(cursorOffset int, extraLines int, height int, f
 		buffer.WriteString("A")
 	}
 
-	buffer.WriteString(SyncOutputEnd)
+	t.writeSyncEnd(&buffer)
 	t.terminal.Write(buffer.String())
 	return false
 }
@@ -507,12 +507,12 @@ type FullRenderer struct {
 
 func (f FullRenderer) Render(clear bool) {
 	var buffer strings.Builder
-	buffer.WriteString(SyncOutputBegin) // Begin synchronized output
+	f.tui.writeSyncBegin(&buffer)
 	if clear {
 		buffer.WriteString("\x1b[3J\x1b[2J\x1b[H") // Clear scrollback, screen, and home
 	}
 	buffer.WriteString(strings.Join(f.newLines, "\r\n"))
-	buffer.WriteString(SyncOutputEnd) // End synchronized output
+	f.tui.writeSyncEnd(&buffer)
 	f.tui.terminal.Write(buffer.String())
 
 	f.tui.cursorRow = max(0, len(f.newLines)-1)
@@ -540,6 +540,18 @@ func (t *TUI) getFullRender(newLines []string, height int, row int, col int, wid
 		row:      row,
 		col:      col,
 		tui:      t,
+	}
+}
+
+func (t *TUI) writeSyncBegin(b *strings.Builder) {
+	if t.terminal.SupportsSyncOutput() {
+		b.WriteString(SyncOutputBegin)
+	}
+}
+
+func (t *TUI) writeSyncEnd(b *strings.Builder) {
+	if t.terminal.SupportsSyncOutput() {
+		b.WriteString(SyncOutputEnd)
 	}
 }
 

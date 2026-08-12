@@ -34,6 +34,10 @@ func (m *testTerminal) IsKittyProtocolActive() bool {
 	return false
 }
 
+func (m *testTerminal) SupportsSyncOutput() bool {
+	return false
+}
+
 func (m *testTerminal) MoveBy(lines int)      {}
 func (m *testTerminal) HideCursor()           {}
 func (m *testTerminal) ShowCursor()           {}
@@ -332,7 +336,8 @@ func (m *stopRaceTerminal) Write(data string) {
 }
 func (m *stopRaceTerminal) GetSize() (int, int)         { return 80, 24 }
 func (m *stopRaceTerminal) IsKittyProtocolActive() bool { return false }
-func (m *stopRaceTerminal) MoveBy(lines int)              {}
+func (m *stopRaceTerminal) SupportsSyncOutput() bool    { return true }
+func (m *stopRaceTerminal) MoveBy(lines int)            {}
 func (m *stopRaceTerminal) HideCursor() {
 	if m.stopped.Load() {
 		m.hideAfterStop.Add(1)
